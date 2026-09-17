@@ -157,6 +157,7 @@ def _with_output_root(
         xiao_ema=detection.xiao_ema,
         page_hinkley=detection.page_hinkley,
         adwin=detection.adwin,
+        kswin=detection.kswin,
         daily_frequency=(
             replace(
                 detection.daily_frequency,

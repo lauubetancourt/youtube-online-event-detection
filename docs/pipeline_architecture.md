@@ -209,6 +209,13 @@ new neutral `SignalObservation` values or explicit absences without replacing
 `ActivityObservation`. Its grid is independent of activity, and it is not connected
 to cyclic runtime, classifiers, detectors, association, candidates, or RAG.
 
+PH, ADWIN and KSWIN now share a value-only `NumericObservationDetector` boundary
+supporting both historical `ActivityObservation` and neutral `SignalObservation`.
+The existing dispatcher skips explicit no-value observations without updating
+state or producing a DetectionResult. Long-gap reset policy remains open. Standalone
+synthetic polarization observations can be routed through this boundary in tests;
+no polarization detector runtime is connected. See [KSWIN integration](kswin_integration.md).
+
 ## XIAO reference path
 
 XIAO EMA is both `REFERENCE_DETECTOR` and `REGRESSION_ANCHOR`; it is not the final
@@ -364,7 +371,7 @@ and do not treat those locations as scientific authorities.
 | Page-Hinkley adapter | IMPLEMENTED_AND_ACTIVE | Selectable in the technical cyclic activity runtime; uncalibrated |
 | ADWIN adapter | IMPLEMENTED_AND_ACTIVE | Selectable in the same technical cyclic activity runtime; uncalibrated |
 | Temporal polarization producer | IMPLEMENTED_SYNTHETIC_ONLY | Standalone causal closed-window author distributions and configured formal measures; uncalibrated |
-| KSWIN adapter | OPEN_JUSTIFIED_FOR_EVALUATION | Hypothesis: distribution changes in sequences of scalar polarization values; not implemented or assigned as an official detector |
+| KSWIN adapter | TECHNICALLY_AVAILABLE_EXPERIMENTALLY_OPEN | Seeded scalar-distribution detection tested with activity and polarization; not a default/final polarization detector |
 | True online ingestion | DEFERRED | Requires A9 contracts and operational state |
 | Durable checkpoint/restore | DEFERRED | Current detector state is in-memory or report-oriented |
 | Late-arrival handling/watermarks | DEFERRED | Requires distinct observation/ingestion time |

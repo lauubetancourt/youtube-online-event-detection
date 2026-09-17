@@ -4,7 +4,7 @@ from youtube_pipeline.activity_detection import (
     ActivityDetectionRouteConfig,
     DetectionResult,
 )
-from youtube_pipeline.detectors import ADWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.polarization_measures import (
     EMDPolConfig,
@@ -33,6 +33,7 @@ from .serialization import (
 
 __all__ = [
     "ADWINConfig",
+    "KSWINConfig",
     "ActivityDetectionRouteConfig",
     "ArtifactsConfig",
     "canonical_run_config_json",

@@ -18,6 +18,9 @@ from youtube_pipeline.activity_signals import (
 from youtube_pipeline.activity_detection import (
     ActivityObservationDetector,
     DetectionResult,
+    NumericObservation,
+    NumericObservationDetector,
+    require_numeric_observation,
 )
 
 
@@ -117,11 +120,10 @@ class PageHinkleyAdapter:
             mode=self.config.mode,
         )
 
-    def on_observation(self, observation: ActivityObservation) -> DetectionResult:
+    def on_observation(self, observation: NumericObservation) -> DetectionResult:
         """Update Page-Hinkley with the observation's numeric value only."""
 
-        if not isinstance(observation, ActivityObservation):
-            raise TypeError("observation must be an ActivityObservation.")
+        signal_id = require_numeric_observation(observation)
 
         # River resets Page-Hinkley at the start of the update after a drift.
         # Mirror that public lifecycle in the adapter-owned warm-up counter.
@@ -133,7 +135,7 @@ class PageHinkleyAdapter:
 
         return DetectionResult(
             detector_id=self.detector_id,
-            signal_id=observation.signal.signal_id,
+            signal_id=signal_id,
             observation_time_utc=observation.observation_time_utc,
             triggered=bool(self._detector.drift_detected),
             quality=observation.quality,
@@ -224,11 +226,10 @@ class ADWINAdapter:
             grace_period=self.config.grace_period,
         )
 
-    def on_observation(self, observation: ActivityObservation) -> DetectionResult:
+    def on_observation(self, observation: NumericObservation) -> DetectionResult:
         """Update ADWIN with the observation's numeric value only."""
 
-        if not isinstance(observation, ActivityObservation):
-            raise TypeError("observation must be an ActivityObservation.")
+        signal_id = require_numeric_observation(observation)
 
         # River resets ADWIN at the start of the update after a drift. Mirror
         # that public lifecycle in the adapter-owned segment counter.
@@ -240,7 +241,7 @@ class ADWINAdapter:
 
         return DetectionResult(
             detector_id=self.detector_id,
-            signal_id=observation.signal.signal_id,
+            signal_id=signal_id,
             observation_time_utc=observation.observation_time_utc,
             triggered=bool(self._detector.drift_detected),
             quality=observation.quality,
@@ -250,6 +251,93 @@ class ADWINAdapter:
                 "width": self._detector.width,
                 "estimation": self._detector.estimation,
                 "variance": self._detector.variance,
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class KSWINConfig:
+    """Public River parameters; library defaults are technical, not calibrated.
+
+    ``window_size`` counts scalar observations, not seconds. The sampling code
+    requires window_size >= 2 * stat_size. River's constructor misses this check.
+    Initial ``window`` data is input/state, intentionally not configuration.
+    With seed=None, random sampling is not reproducible across new instances.
+    """
+
+    alpha: float = 0.005
+    window_size: int = 100
+    stat_size: int = 30
+    seed: int | None = None
+
+    @classmethod
+    def from_mapping(cls, payload: dict[str, Any]) -> "KSWINConfig":
+        if not isinstance(payload, dict):
+            raise TypeError("KSWIN config must be an object.")
+        unknown = sorted(set(payload) - set(cls.__dataclass_fields__))
+        if unknown:
+            raise ValueError(f"Unknown KSWIN config fields: {unknown}")
+        return cls(**payload)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.alpha, bool) or not isinstance(self.alpha, Real):
+            raise TypeError("alpha must be a real number.")
+        alpha = float(self.alpha)
+        if not math.isfinite(alpha):
+            raise ValueError("alpha must be finite.")
+        if not 0 <= alpha <= 1:
+            raise ValueError("alpha must be in [0, 1], as accepted by River.")
+        object.__setattr__(self, "alpha", alpha)
+        for name in ("window_size", "stat_size"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer.")
+            if value < 1:
+                raise ValueError(f"{name} must be positive for a nonempty KS test.")
+        if self.window_size < 2 * self.stat_size:
+            raise ValueError("window_size must be >= 2 * stat_size for sampling without replacement.")
+        if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)):
+            raise TypeError("seed must be an integer or None.")
+
+
+class KSWINAdapter:
+    """Detect distribution changes of scalar values, never opinion vectors.
+
+    For MEC(t), KSWIN compares recent scalar MEC values with a random historical
+    sample. It does not compare OpinionDistribution(t) with its predecessor.
+    This is technical availability, not an official polarization-detector choice.
+    """
+
+    detector_id = "kswin"
+
+    def __init__(self, *, config: KSWINConfig | None = None) -> None:
+        if config is not None and not isinstance(config, KSWINConfig):
+            raise TypeError("config must be KSWINConfig or None.")
+        self.config = config if config is not None else KSWINConfig()
+        self.observations_processed = 0  # lifetime successful updates, gaps excluded
+        self._detector = drift.KSWIN(
+            alpha=self.config.alpha, window_size=self.config.window_size,
+            stat_size=self.config.stat_size, seed=self.config.seed,
+        )
+
+    def on_observation(self, observation: NumericObservation) -> DetectionResult:
+        signal_id = require_numeric_observation(observation)
+        # River trims to recent stat_size on drift, then clears state and reseeds
+        # at the next update. No manual reset, cooldown or XIAO lifecycle here.
+        self._detector.update(observation.value)
+        self.observations_processed += 1
+        return DetectionResult(
+            detector_id=self.detector_id, signal_id=signal_id,
+            observation_time_utc=observation.observation_time_utc,
+            triggered=bool(self._detector.drift_detected), quality=observation.quality,
+            score=None,
+            detector_metadata={
+                "observations_processed": self.observations_processed,
+                "segment_observations": self._detector.n,
+                "window_length": len(self._detector.window),
+                "window_size": self.config.window_size,
+                "stat_size": self.config.stat_size,
+                "alpha": self.config.alpha, "seed": self.config.seed,
             },
         )
 
@@ -570,6 +658,7 @@ class XiaoEMATriggerDetector:
 DEFAULT_DETECTOR = "xiao_ema"
 PAGE_HINKLEY_DETECTOR = "page_hinkley"
 ADWIN_DETECTOR = "adwin"
+KSWIN_DETECTOR = "kswin"
 DETECTOR_PARAM_ALIASES = {
     "trigger_window_size": "window_size",
     "trigger_slide_interval": "slide_interval",
@@ -578,10 +667,11 @@ DETECTOR_PARAM_ALIASES = {
     "trigger_min_volume": "v_min",
     "trigger_cooldown": "cooldown",
 }
-DETECTOR_REGISTRY: dict[str, Callable[..., ActivityObservationDetector]] = {
+DETECTOR_REGISTRY: dict[str, Callable[..., ActivityObservationDetector | NumericObservationDetector]] = {
     DEFAULT_DETECTOR: XiaoEMATriggerDetector,
     PAGE_HINKLEY_DETECTOR: PageHinkleyAdapter,
     ADWIN_DETECTOR: ADWINAdapter,
+    KSWIN_DETECTOR: KSWINAdapter,
 }
 
 
@@ -599,7 +689,7 @@ def get_detector_names() -> tuple[str, ...]:
 def create_detector(
     name: str | None = DEFAULT_DETECTOR,
     **params: Any,
-) -> ActivityObservationDetector:
+) -> ActivityObservationDetector | NumericObservationDetector:
     detector_name = name or DEFAULT_DETECTOR
     try:
         factory = DETECTOR_REGISTRY[detector_name]
@@ -616,6 +706,10 @@ __all__ = [
     "ADWINConfig",
     "ADWIN_DETECTOR",
     "ActivityObservationDetector",
+    "NumericObservationDetector",
+    "KSWINAdapter",
+    "KSWINConfig",
+    "KSWIN_DETECTOR",
     "DEFAULT_DETECTOR",
     "DETECTOR_PARAM_ALIASES",
     "DETECTOR_REGISTRY",

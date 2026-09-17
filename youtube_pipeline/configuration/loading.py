@@ -21,7 +21,7 @@ from youtube_pipeline.daily_rag_context_selection import DailyContextSelectionCo
 from youtube_pipeline.daily_rag_consumer import DailyRagConsumerConfig
 from youtube_pipeline.daily_rag_sidecars import DailyRagSidecarBuildConfig
 from youtube_pipeline.data_extraction import ExtractionConfig
-from youtube_pipeline.detectors import ADWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_measures import (
     EMDPolConfig,
@@ -68,6 +68,7 @@ _DETECTION_FIELDS = {
     "xiao_ema",
     "page_hinkley",
     "adwin",
+    "kswin",
     "daily_frequency",
 }
 _POLARIZATION_FIELDS = {"measure_id", "esteban_ray", "emd_pol", "mec"}
@@ -361,6 +362,10 @@ def _build_detection(payload: Any) -> DetectionConfig:
             )
             if "adwin" in section
             else None
+        ),
+        kswin=(
+            _build_component(KSWINConfig, section["kswin"], "detection.kswin")
+            if "kswin" in section else None
         ),
         daily_frequency=(
             _build_component(

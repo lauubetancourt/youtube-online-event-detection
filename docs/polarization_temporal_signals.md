@@ -163,7 +163,9 @@ statuses, missing authors, gaps, and equal distributions with different support.
 Values are compared against the existing adapters, not ranked scientifically.
 
 - RESOLVED: technical synthetic temporal polarization producer and config composition.
-- NEXT: `KSWIN-INTEGRATION` (separate phase; no official signal/detector pairing).
+- RESOLVED: [KSWIN technical integration](kswin_integration.md) and synthetic routing
+  checks for all three measures; no complete polarization detector runtime connected.
+- NEXT: `POLARIZATION-CLASSIFIER-IMPLEMENTATION`.
 - OPEN: classifier implementation/validation, proposition discovery, window/cadence
   selection, support threshold, detector gap/reset policy, polarization runtime,
   activity/polarization timestamp association, measure/detector calibration.
