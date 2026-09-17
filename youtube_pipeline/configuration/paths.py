@@ -386,6 +386,7 @@ def resolve_run_config_paths(
                 else None
             ),
             activity=signals.activity,
+            polarization=signals.polarization,
         )
 
     detection = config.detection

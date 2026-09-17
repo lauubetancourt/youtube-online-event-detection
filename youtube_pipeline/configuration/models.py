@@ -23,6 +23,7 @@ from youtube_pipeline.detectors import (
     get_detector_names,
 )
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
+from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.polarization_measures import (
     EMD_POL_MEASURE,
     ESTEBAN_RAY_MEASURE,
@@ -189,6 +190,7 @@ class SignalsConfig:
 
     daily: CyclicDailySignalConfig | None = None
     activity: ActivitySignalDefinition | None = None
+    polarization: PolarizationTemporalSignalConfig | None = None
 
     def __post_init__(self) -> None:
         _require_optional_instance("daily", self.daily, CyclicDailySignalConfig)
@@ -197,7 +199,8 @@ class SignalsConfig:
             self.activity,
             ActivitySignalDefinition,
         )
-        if self.daily is None and self.activity is None:
+        _require_optional_instance("polarization", self.polarization, PolarizationTemporalSignalConfig)
+        if self.daily is None and self.activity is None and self.polarization is None:
             raise ValueError("SignalsConfig must configure at least one signal stage.")
 
 
@@ -271,18 +274,18 @@ class DetectionConfig:
 
 @dataclass(frozen=True, slots=True)
 class PolarizationConfig:
-    """Select one isolated formal measure and its typed public parameters."""
+    """Typed parameters; optional isolated selector, separate from temporal activation."""
 
-    measure_id: str
+    measure_id: str | None = None
     esteban_ray: EstebanRayConfig | None = None
     emd_pol: EMDPolConfig | None = None
     mec: MECConfig | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.measure_id, str):
+        if self.measure_id is not None and not isinstance(self.measure_id, str):
             raise TypeError("measure_id must be a string.")
         available_measures = get_polarization_measure_names()
-        if self.measure_id not in available_measures:
+        if self.measure_id is not None and self.measure_id not in available_measures:
             available = ", ".join(available_measures)
             raise ValueError(
                 f"Unknown polarization measure {self.measure_id!r}; available "
@@ -295,12 +298,14 @@ class PolarizationConfig:
         )
         _require_optional_instance("emd_pol", self.emd_pol, EMDPolConfig)
         _require_optional_instance("mec", self.mec, MECConfig)
-        selected_config = {
+        configurations = {
             ESTEBAN_RAY_MEASURE: self.esteban_ray,
             EMD_POL_MEASURE: self.emd_pol,
             MEC_MEASURE: self.mec,
-        }[self.measure_id]
-        if selected_config is None:
+        }
+        if self.measure_id is None and not any(value is not None for value in configurations.values()):
+            raise ValueError("PolarizationConfig requires measure parameter blocks.")
+        if self.measure_id is not None and configurations[self.measure_id] is None:
             raise ValueError(
                 "The selected polarization measure requires a matching "
                 "configuration block."
@@ -308,12 +313,20 @@ class PolarizationConfig:
 
     @property
     def selected_config(self) -> EstebanRayConfig | EMDPolConfig | MECConfig:
+        if self.measure_id is None:
+            raise ValueError("An isolated measure_id is required for selected_config.")
+        return self.config_for(self.measure_id)
+
+    def config_for(self, measure_id: str) -> EstebanRayConfig | EMDPolConfig | MECConfig:
+        if measure_id not in get_polarization_measure_names():
+            raise ValueError(f"Unknown polarization measure {measure_id!r}.")
         selected = {
             ESTEBAN_RAY_MEASURE: self.esteban_ray,
             EMD_POL_MEASURE: self.emd_pol,
             MEC_MEASURE: self.mec,
-        }[self.measure_id]
-        assert selected is not None
+        }[measure_id]
+        if selected is None:
+            raise ValueError(f"Enabled measure {measure_id!r} requires a matching configuration block.")
         return selected
 
 
@@ -404,6 +417,14 @@ class RunConfig:
         )
         _require_optional_instance("rag", self.rag, RagConfig)
         _require_optional_instance("artifacts", self.artifacts, ArtifactsConfig)
+        temporal = self.signals.polarization if self.signals is not None else None
+        if temporal is not None:
+            if self.polarization is None:
+                raise ValueError("Temporal polarization requires measure parameter configuration.")
+            for measure_id in temporal.enabled_measures:
+                self.polarization.config_for(measure_id)
+        elif self.polarization is not None and self.polarization.measure_id is None:
+            raise ValueError("polarization.measure_id is required for isolated measures.")
         if all(
             section is None
             for section in (

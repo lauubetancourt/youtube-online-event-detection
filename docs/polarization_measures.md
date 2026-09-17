@@ -9,11 +9,11 @@
 
 ```text
 classification                 # not implemented here
-→ distribution building        # not implemented here
+→ distribution building        # standalone synthetic temporal producer available
 → OpinionDistribution
 → configured formal measure
 → PolarizationMeasurement
-→ temporal polarization signal # deferred
+→ temporal polarization signal # standalone synthetic integration; not in cyclic runtime
 → change detector              # deferred
 ```
 
@@ -110,6 +110,8 @@ equally spaced bin indices, which is why empty Likert bins remain present.
 
 ## Deferred work
 
-This implementation does not provide comment classification, proposition
-discovery, distribution aggregation, temporal windows, polarization signals,
-detector integration, calibration, preprocessing evaluation, candidates, or RAG.
+The formal adapters themselves do not provide comment classification, proposition
+discovery, temporal aggregation, detector integration, calibration, preprocessing
+evaluation, candidates, or RAG. A separate [synthetic temporal producer](polarization_temporal_signals.md)
+now builds windowed distributions and emits neutral signal observations using these
+unchanged adapters. It is not connected to the cyclic runtime or any detector.

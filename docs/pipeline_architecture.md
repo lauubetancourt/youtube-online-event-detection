@@ -202,6 +202,13 @@ comments, aggregate authors, create windows, or emit detector input. Selection
 and public method parameters are typed under `RunConfig.polarization`. See
 [formal polarization measures](polarization_measures.md).
 
+A standalone [synthetic temporal polarization producer](polarization_temporal_signals.md)
+now consumes ordered `CommentStance` causal prefixes, builds one closed-window author
+distribution per configured tick, and evaluates the enabled measure list. It emits
+new neutral `SignalObservation` values or explicit absences without replacing
+`ActivityObservation`. Its grid is independent of activity, and it is not connected
+to cyclic runtime, classifiers, detectors, association, candidates, or RAG.
+
 ## XIAO reference path
 
 XIAO EMA is both `REFERENCE_DETECTOR` and `REGRESSION_ANCHOR`; it is not the final
@@ -356,7 +363,8 @@ and do not treat those locations as scientific authorities.
 | River 0.26.1 | IMPLEMENTED_AND_AVAILABLE | Reproducible dependency encapsulated by neutral detector adapters |
 | Page-Hinkley adapter | IMPLEMENTED_AND_ACTIVE | Selectable in the technical cyclic activity runtime; uncalibrated |
 | ADWIN adapter | IMPLEMENTED_AND_ACTIVE | Selectable in the same technical cyclic activity runtime; uncalibrated |
-| KSWIN adapter | DEFERRED_CONDITIONAL | Requires a concrete distribution-change use case not represented by Page-Hinkley or ADWIN |
+| Temporal polarization producer | IMPLEMENTED_SYNTHETIC_ONLY | Standalone causal closed-window author distributions and configured formal measures; uncalibrated |
+| KSWIN adapter | OPEN_JUSTIFIED_FOR_EVALUATION | Hypothesis: distribution changes in sequences of scalar polarization values; not implemented or assigned as an official detector |
 | True online ingestion | DEFERRED | Requires A9 contracts and operational state |
 | Durable checkpoint/restore | DEFERRED | Current detector state is in-memory or report-oriented |
 | Late-arrival handling/watermarks | DEFERRED | Requires distinct observation/ingestion time |

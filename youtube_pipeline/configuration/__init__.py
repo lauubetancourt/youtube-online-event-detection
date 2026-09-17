@@ -5,6 +5,7 @@ from youtube_pipeline.activity_detection import (
     DetectionResult,
 )
 from youtube_pipeline.detectors import ADWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.polarization_measures import (
     EMDPolConfig,
     EstebanRayConfig,
@@ -44,6 +45,7 @@ __all__ = [
     "PageHinkleyConfig",
     "MECConfig",
     "PolarizationConfig",
+    "PolarizationTemporalSignalConfig",
     "RagConfig",
     "ResolvedRunConfig",
     "resolve_run_config",

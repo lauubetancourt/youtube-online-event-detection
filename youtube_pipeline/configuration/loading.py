@@ -9,6 +9,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from youtube_pipeline.activity_detection import ActivityDetectionRouteConfig
 from youtube_pipeline.activity_signals import ActivitySignalDefinition
+from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.cleaning import CleaningConfig
 from youtube_pipeline.cyclic_daily_signals import CyclicDailySignalConfig
 from youtube_pipeline.cyclic_detection_connector import CyclicDetectionConnectorConfig
@@ -60,7 +61,7 @@ _ROOT_FIELDS = {
 }
 _DATA_FIELDS = {"youtube_api", "local_files", "prepared_dataset", "cleaning"}
 _SIMULATION_FIELDS = {"ingestion", "orchestration", "stateful_adapter", "replay"}
-_SIGNALS_FIELDS = {"daily", "activity"}
+_SIGNALS_FIELDS = {"daily", "activity", "polarization"}
 _DETECTION_FIELDS = {
     "activity_route",
     "connector",
@@ -301,6 +302,10 @@ def _build_signals(payload: Any) -> SignalsConfig:
             if "activity" in section
             else None
         ),
+        polarization=(
+            _build_component(PolarizationTemporalSignalConfig, section["polarization"], "signals.polarization")
+            if "polarization" in section else None
+        ),
     )
 
 
@@ -372,10 +377,8 @@ def _build_detection(payload: Any) -> DetectionConfig:
 def _build_polarization(payload: Any) -> PolarizationConfig:
     section = _require_object(payload, "polarization")
     _reject_unknown_keys(section, _POLARIZATION_FIELDS, "polarization")
-    if "measure_id" not in section:
-        raise ValueError("polarization.measure_id is required.")
-    measure_id = section["measure_id"]
-    if not isinstance(measure_id, str):
+    measure_id = section.get("measure_id")
+    if "measure_id" in section and not isinstance(measure_id, str):
         raise TypeError("polarization.measure_id must be a string.")
     return PolarizationConfig(
         measure_id=measure_id,
