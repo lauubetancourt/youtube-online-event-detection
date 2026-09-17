@@ -5,6 +5,9 @@ from youtube_pipeline.activity_detection import (
     DetectionResult,
 )
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.stance_classifier import (
+    CommentStanceClassifierConfig, ClassifierRetryPolicy, StanceProposition,
+)
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.polarization_measures import (
     EMDPolConfig,
@@ -34,6 +37,9 @@ from .serialization import (
 __all__ = [
     "ADWINConfig",
     "KSWINConfig",
+    "CommentStanceClassifierConfig",
+    "ClassifierRetryPolicy",
+    "StanceProposition",
     "ActivityDetectionRouteConfig",
     "ArtifactsConfig",
     "canonical_run_config_json",

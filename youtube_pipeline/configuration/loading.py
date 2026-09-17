@@ -9,6 +9,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from youtube_pipeline.activity_detection import ActivityDetectionRouteConfig
 from youtube_pipeline.activity_signals import ActivitySignalDefinition
+from youtube_pipeline.stance_classifier import CommentStanceClassifierConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.cleaning import CleaningConfig
 from youtube_pipeline.cyclic_daily_signals import CyclicDailySignalConfig
@@ -71,7 +72,7 @@ _DETECTION_FIELDS = {
     "kswin",
     "daily_frequency",
 }
-_POLARIZATION_FIELDS = {"measure_id", "esteban_ray", "emd_pol", "mec"}
+_POLARIZATION_FIELDS = {"measure_id", "esteban_ray", "emd_pol", "mec", "classifier"}
 _RAG_FIELDS = {
     "evidence",
     "sidecars",
@@ -387,6 +388,10 @@ def _build_polarization(payload: Any) -> PolarizationConfig:
         raise TypeError("polarization.measure_id must be a string.")
     return PolarizationConfig(
         measure_id=measure_id,
+        classifier=(
+            _build_component(CommentStanceClassifierConfig, section["classifier"], "polarization.classifier")
+            if "classifier" in section else None
+        ),
         esteban_ray=(
             _build_component(
                 EstebanRayConfig,

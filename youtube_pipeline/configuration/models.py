@@ -5,6 +5,7 @@ from typing import Any
 
 from youtube_pipeline.activity_detection import ActivityDetectionRouteConfig
 from youtube_pipeline.activity_signals import ActivitySignalDefinition
+from youtube_pipeline.stance_classifier import CommentStanceClassifierConfig
 from youtube_pipeline.cleaning import CleaningConfig
 from youtube_pipeline.cyclic_daily_signals import CyclicDailySignalConfig
 from youtube_pipeline.cyclic_detection_connector import CyclicDetectionConnectorConfig
@@ -286,6 +287,7 @@ class PolarizationConfig:
     esteban_ray: EstebanRayConfig | None = None
     emd_pol: EMDPolConfig | None = None
     mec: MECConfig | None = None
+    classifier: CommentStanceClassifierConfig | None = None
 
     def __post_init__(self) -> None:
         if self.measure_id is not None and not isinstance(self.measure_id, str):
@@ -304,12 +306,13 @@ class PolarizationConfig:
         )
         _require_optional_instance("emd_pol", self.emd_pol, EMDPolConfig)
         _require_optional_instance("mec", self.mec, MECConfig)
+        _require_optional_instance("classifier", self.classifier, CommentStanceClassifierConfig)
         configurations = {
             ESTEBAN_RAY_MEASURE: self.esteban_ray,
             EMD_POL_MEASURE: self.emd_pol,
             MEC_MEASURE: self.mec,
         }
-        if self.measure_id is None and not any(value is not None for value in configurations.values()):
+        if self.measure_id is None and self.classifier is None and not any(value is not None for value in configurations.values()):
             raise ValueError("PolarizationConfig requires measure parameter blocks.")
         if self.measure_id is not None and configurations[self.measure_id] is None:
             raise ValueError(
@@ -429,7 +432,7 @@ class RunConfig:
                 raise ValueError("Temporal polarization requires measure parameter configuration.")
             for measure_id in temporal.enabled_measures:
                 self.polarization.config_for(measure_id)
-        elif self.polarization is not None and self.polarization.measure_id is None:
+        elif self.polarization is not None and self.polarization.measure_id is None and self.polarization.classifier is None:
             raise ValueError("polarization.measure_id is required for isolated measures.")
         if all(
             section is None

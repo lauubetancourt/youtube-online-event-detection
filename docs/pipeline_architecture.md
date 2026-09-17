@@ -371,6 +371,7 @@ and do not treat those locations as scientific authorities.
 | Page-Hinkley adapter | IMPLEMENTED_AND_ACTIVE | Selectable in the technical cyclic activity runtime; uncalibrated |
 | ADWIN adapter | IMPLEMENTED_AND_ACTIVE | Selectable in the same technical cyclic activity runtime; uncalibrated |
 | Temporal polarization producer | IMPLEMENTED_SYNTHETIC_ONLY | Standalone causal closed-window author distributions and configured formal measures; uncalibrated |
+| Individual stance classifier | TECHNICALLY_INTEGRATED_NOT_VALIDATED | [Standalone classifier](stance_classifier.md), explicit proposition, strict stance-only output, mocked API tests; no temporal/detector runtime handoff |
 | KSWIN adapter | TECHNICALLY_AVAILABLE_EXPERIMENTALLY_OPEN | Seeded scalar-distribution detection tested with activity and polarization; not a default/final polarization detector |
 | True online ingestion | DEFERRED | Requires A9 contracts and operational state |
 | Durable checkpoint/restore | DEFERRED | Current detector state is in-memory or report-oriented |

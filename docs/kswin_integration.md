@@ -180,10 +180,11 @@ polarization route is connected to that entrypoint.
 
 - RESOLVED: PH, ADWIN and KSWIN technical integration; synthetic temporal polarization.
 - TECHNICALLY_AVAILABLE / EXPERIMENTALLY_OPEN: all three neutral numeric detectors.
-- OPEN: classifier/validation, proposition discovery, polarization detector runtime,
+- RESOLVED: [standalone stance classifier integration](stance_classifier.md), not validated.
+- OPEN: classifier validation, proposition discovery, polarization detector runtime,
   detector gap/reset policy, preprocessing, timestamp-based alert association,
   EventCandidate fusion, calibration, and existing configuration/traceability debts.
-- NEXT: `POLARIZATION-CLASSIFIER-IMPLEMENTATION`.
+- NEXT: `POLARIZATION-CLASSIFIER-VALIDATION`.
 
 These hypotheses remain open, never encoded as routing restrictions:
 

@@ -165,8 +165,10 @@ Values are compared against the existing adapters, not ranked scientifically.
 - RESOLVED: technical synthetic temporal polarization producer and config composition.
 - RESOLVED: [KSWIN technical integration](kswin_integration.md) and synthetic routing
   checks for all three measures; no complete polarization detector runtime connected.
-- NEXT: `POLARIZATION-CLASSIFIER-IMPLEMENTATION`.
-- OPEN: classifier implementation/validation, proposition discovery, window/cadence
+- RESOLVED: [standalone classifier technical integration](stance_classifier.md);
+  its JSONL is not connected to temporal runtime in this phase.
+- NEXT: `POLARIZATION-CLASSIFIER-VALIDATION`.
+- OPEN: classifier validation, proposition discovery, window/cadence
   selection, support threshold, detector gap/reset policy, polarization runtime,
   activity/polarization timestamp association, measure/detector calibration.
 - OPEN: `PREPROCESSING-EVAL`, dataset config consolidation, unified artifact traceability,
