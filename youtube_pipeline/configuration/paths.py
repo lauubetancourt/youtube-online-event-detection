@@ -395,6 +395,7 @@ def resolve_run_config_paths(
         detection = DetectionConfig(
             activity_route=detection.activity_route,
             routes=detection.routes,
+            gap_policy=detection.gap_policy,
             connector=(
                 _resolve_detection_connector(detection.connector, base)
                 if detection.connector is not None

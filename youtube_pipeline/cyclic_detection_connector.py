@@ -19,6 +19,13 @@ from .activity_signals import (
     create_activity_signal,
 )
 from .detectors import XiaoEMAConfig, create_detector
+from .detection_alerts import (
+    ACTIVITY,
+    GAP_POLICY_METHODOLOGICAL_STATUS,
+    DetectionGapPolicyConfig,
+    detection_alert_from_result,
+    detection_result_id,
+)
 from .monitoring import default_activity_metrics, default_polarization_metrics
 
 
@@ -27,6 +34,7 @@ DETECTION_SMOKE_TEST_MODE = "detection_smoke_test"
 ACTIVITY_DETECTION_RUNTIME_MODE = "activity_detection_runtime"
 SMOKE_TEST_OUTPUT_SUBDIR = "detection_smoke_test"
 ACTIVITY_DETECTION_OUTPUT_SUBDIR = "activity_detection_runtime"
+DETECTION_ALERT_ARTIFACT = "detection_alerts.jsonl"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1006,6 +1014,7 @@ def _activity_detection_result_row(
     result: DetectionResult,
 ) -> dict[str, Any]:
     return {
+        "detection_result_id": detection_result_id(run_id=run_id, result=result),
         "run_id": run_id,
         "simulation_run_id": cycle["simulation_run_id"],
         "cycle_id": cycle["cycle_id"],
@@ -1032,6 +1041,8 @@ def run_cyclic_activity_detection_runtime(
     route: ActivityDetectionRouteConfig,
     signal_definition: ActivitySignalDefinition,
     detector_config: Any,
+    config_hash: str = "legacy_direct_invocation",
+    gap_policy: DetectionGapPolicyConfig | None = None,
 ) -> dict[str, Any]:
     """Execute one neutral activity-signal route over causally available cycles."""
 
@@ -1043,6 +1054,11 @@ def run_cyclic_activity_detection_runtime(
         raise TypeError("signal_definition must be an ActivitySignalDefinition.")
     if route.signal_id != signal_definition.signal_id:
         raise ValueError("Activity route signal_id must match the signal definition.")
+    if not isinstance(config_hash, str) or not config_hash.strip():
+        raise ValueError("config_hash must be a non-empty string.")
+    effective_gap_policy = gap_policy or DetectionGapPolicyConfig()
+    if not isinstance(effective_gap_policy, DetectionGapPolicyConfig):
+        raise TypeError("gap_policy must be DetectionGapPolicyConfig or None.")
     simulation_dir = config.simulation_path()
     output_dir = config.output_path()
     adapter_manifest = _read_json(simulation_dir / "cycle_adapter_manifest.json")
@@ -1072,6 +1088,7 @@ def run_cyclic_activity_detection_runtime(
     seen_comment_ids: set[str] = set()
     observation_keys: set[tuple[str, str]] = set()
     result_rows: list[dict[str, Any]] = []
+    alert_rows: list[dict[str, Any]] = []
     cycle_rows: list[dict[str, Any]] = []
     last_event_time: pd.Timestamp | None = None
     last_observation_time: pd.Timestamp | None = None
@@ -1124,6 +1141,17 @@ def run_cyclic_activity_detection_runtime(
                         result=result,
                     )
                 )
+                alert = detection_alert_from_result(
+                    result,
+                    run_id=run_id,
+                    config_hash=config_hash,
+                    signal_family=ACTIVITY,
+                    support_count=observation.support_count,
+                    data_cutoff_utc=cutoff.to_pydatetime(),
+                    detection_artifact_ref="activity_detection_results.jsonl",
+                )
+                if alert is not None:
+                    alert_rows.append(alert.to_mapping())
                 last_observation_time = observation_time
 
         cycle_results = len(result_rows) - cycle_result_start
@@ -1153,6 +1181,7 @@ def run_cyclic_activity_detection_runtime(
     manifest = {
         "schema_version": "1",
         "run_id": run_id,
+        "config_hash": config_hash,
         "simulation_run_id": adapter_manifest["simulation_run_id"],
         "stage": "C-4",
         "mode": ACTIVITY_DETECTION_RUNTIME_MODE,
@@ -1173,6 +1202,7 @@ def run_cyclic_activity_detection_runtime(
             "observations_emitted": len(result_rows),
             "detection_results_produced": len(result_rows),
             "triggered_results": trigger_count,
+            "detection_alerts": len(alert_rows),
         },
         "causality": {
             "event_visibility_rule": "event_time_utc < data_cutoff_utc",
@@ -1189,12 +1219,28 @@ def run_cyclic_activity_detection_runtime(
             "checkpoint_status": "deferred_to_A9",
             "comments_seen_count_from_c3": stateful_context.get("seen_comment_count"),
         },
+        "gap_policy": {
+            "policy_id": effective_gap_policy.policy_id,
+            "configuration_status": (
+                "explicit" if gap_policy is not None else "legacy_implicit_equivalent"
+            ),
+            "behavior": "skip_absent_value_preserve_detector_state",
+            "methodological_status": GAP_POLICY_METHODOLOGICAL_STATUS,
+            "activity_absent_statuses_currently_emitted": False,
+        },
+        "alerts": {
+            "signal_family": ACTIVITY,
+            "production_rule": "triggered_detection_results_only",
+            "count": len(alert_rows),
+            "future_association_status": "not_executed",
+        },
         "output_artifacts": {
             "activity_detection_results": "activity_detection_results.jsonl",
             "cycle_activity_detection_outputs": (
                 "cycle_activity_detection_outputs.jsonl"
             ),
             "activity_detection_manifest": "activity_detection_manifest.json",
+            "detection_alerts": DETECTION_ALERT_ARTIFACT,
         },
         "downstream": {
             "event_candidate_runtime": "not_executed",
@@ -1206,8 +1252,10 @@ def run_cyclic_activity_detection_runtime(
     results_path = output_dir / "activity_detection_results.jsonl"
     cycle_outputs_path = output_dir / "cycle_activity_detection_outputs.jsonl"
     manifest_path = output_dir / "activity_detection_manifest.json"
+    alert_path = output_dir / DETECTION_ALERT_ARTIFACT
     _write_jsonl(results_path, result_rows)
     _write_jsonl(cycle_outputs_path, cycle_rows)
+    _write_jsonl(alert_path, alert_rows)
     _write_json(manifest_path, manifest)
 
     return {
@@ -1224,11 +1272,13 @@ def run_cyclic_activity_detection_runtime(
         "observations_emitted": len(result_rows),
         "detection_results_produced": len(result_rows),
         "trigger_count": trigger_count,
+        "alert_count": len(alert_rows),
         "runtime_errors": 0,
         "artifacts": {
             "activity_detection_results": str(results_path),
             "cycle_activity_detection_outputs": str(cycle_outputs_path),
             "activity_detection_manifest": str(manifest_path),
+            "detection_alerts": str(alert_path),
         },
     }
 
@@ -1241,6 +1291,8 @@ def run_cyclic_detection_connector(
     activity_route: ActivityDetectionRouteConfig | None = None,
     signal_definition: ActivitySignalDefinition | None = None,
     detector_config: Any = None,
+    config_hash: str = "legacy_direct_invocation",
+    gap_policy: DetectionGapPolicyConfig | None = None,
 ) -> dict[str, Any]:
     config.validate_c4_scope()
     if config.mode == ACTIVITY_DETECTION_RUNTIME_MODE:
@@ -1259,6 +1311,8 @@ def run_cyclic_detection_connector(
             route=activity_route,
             signal_definition=signal_definition,
             detector_config=detector_config,
+            config_hash=config_hash,
+            gap_policy=gap_policy,
         )
 
     effective_xiao_config = xiao_config or XiaoEMAConfig()

@@ -151,6 +151,14 @@ construcción de la señal de comentarios, añadieron la señal experimental de 
 únicos, declararon la ruta señal→detector y definieron `DetectionResult` y
 `EventCandidate`.
 
+Triggered results can now be projected into the same neutral `DetectionAlert`
+contract used by polarization. The alert adds explicit `signal_family=ACTIVITY`,
+run/config lineage, support, causal cutoff and a deterministic reference to the
+persisted result. It does not replace the legacy `EventCandidate` path and does not
+perform association. Current activity signals emit numeric observations rather than
+explicit absence states, so `preserve_state_v1` does not change their historical
+behavior. See [detection alerts and gap policy](detection_alerts_and_gap_policy.md).
+
 Estos avances no significan que toda la ruta productiva use ya la frontera neutral:
 
 - XIAO produce `DetectionResult`, pero su camino histórico continúa publicando

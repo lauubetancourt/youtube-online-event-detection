@@ -17,13 +17,22 @@ from youtube_pipeline.activity_detection import (
 )
 from youtube_pipeline.configuration.models import RunConfig
 from youtube_pipeline.detectors import create_detector
+from youtube_pipeline.detection_alerts import (
+    GAP_POLICY_METHODOLOGICAL_STATUS,
+    POLARIZATION,
+    PRESERVE_STATE_V1,
+    DetectionGapPolicyConfig,
+    detection_alert_from_result,
+    detection_result_id,
+)
 from youtube_pipeline.signal_observations import SignalObservation, to_json_mapping
 
 
 DETECTION_ARTIFACT = "polarization_detection_results.jsonl"
 DETECTION_MANIFEST = "polarization_detection_manifest.json"
+DETECTION_ALERT_ARTIFACT = "detection_alerts.jsonl"
 TECHNICAL_GAP_POLICY = "skip_absent_value_preserve_detector_state_v1"
-METHODOLOGICAL_GAP_STATUS = "OPEN"
+METHODOLOGICAL_GAP_STATUS = GAP_POLICY_METHODOLOGICAL_STATUS
 SUPPORTED_POLARIZATION_DETECTORS = frozenset({"page_hinkley", "adwin", "kswin"})
 
 
@@ -31,11 +40,13 @@ SUPPORTED_POLARIZATION_DETECTORS = frozenset({"page_hinkley", "adwin", "kswin"})
 class PolarizationDetectionRuntimeArtifacts:
     result_path: Path
     manifest_path: Path
+    alert_path: Path
     routes_count: int
     observations_available: int
     observations_skipped_no_value: int
     results_produced: int
     trigger_count: int
+    alerts_produced: int
     future_leak_count: int
 
 
@@ -146,6 +157,11 @@ def run_polarization_detection_runtime(
         raise ValueError("Polarization detection requires signals.polarization.")
     if config.detection is None:
         raise ValueError("Polarization detection requires detection configuration.")
+    effective_gap_policy = (
+        config.detection.gap_policy or DetectionGapPolicyConfig()
+    )
+    if effective_gap_policy.policy_id != PRESERVE_STATE_V1:
+        raise ValueError("Unsupported polarization detection gap policy.")
 
     route_by_signal = {route.signal_id: route for route in routes}
     route_detectors = {
@@ -174,6 +190,7 @@ def run_polarization_detection_runtime(
     ))
 
     rows: list[dict[str, Any]] = []
+    alert_rows: list[dict[str, Any]] = []
     available = Counter()
     skipped = Counter()
     triggers = Counter()
@@ -207,16 +224,29 @@ def run_polarization_detection_runtime(
             distribution_time=distribution_time,
             result=result,
         ))
+        alert = detection_alert_from_result(
+            result,
+            run_id=config.identity.run_id,
+            config_hash=config_hash,
+            signal_family=POLARIZATION,
+            support_count=observation.support_count,
+            data_cutoff_utc=cutoff,
+            detection_artifact_ref=DETECTION_ARTIFACT,
+        )
+        if alert is not None:
+            alert_rows.append(alert.to_mapping())
 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     result_path = root / DETECTION_ARTIFACT
     manifest_path = root / DETECTION_MANIFEST
-    if result_path.exists() or manifest_path.exists():
+    alert_path = root / DETECTION_ALERT_ARTIFACT
+    if result_path.exists() or manifest_path.exists() or alert_path.exists():
         raise FileExistsError(
             "Polarization detection outputs already exist; choose a fresh output."
         )
     result_hash = _write_jsonl_exclusive(result_path, rows)
+    alert_hash = _write_jsonl_exclusive(alert_path, alert_rows)
     temporal = config.signals.polarization
     route_rows = []
     for route in routes:
@@ -258,8 +288,15 @@ def run_polarization_detection_runtime(
             "observations_skipped_no_value": sum(skipped.values()),
             "detection_results": len(rows),
             "trigger_count": sum(triggers.values()),
+            "detection_alerts": len(alert_rows),
         },
         "gap_policy": {
+            "policy_id": effective_gap_policy.policy_id,
+            "configuration_status": (
+                "explicit"
+                if config.detection.gap_policy is not None
+                else "legacy_implicit_equivalent"
+            ),
             "technical_behavior": TECHNICAL_GAP_POLICY,
             "detector_state_on_absence": "unchanged",
             "reset": False,
@@ -275,6 +312,14 @@ def run_polarization_detection_runtime(
         "artifacts": {
             "detection_results": DETECTION_ARTIFACT,
             "detection_results_sha256": result_hash,
+            "detection_alerts": DETECTION_ALERT_ARTIFACT,
+            "detection_alerts_sha256": alert_hash,
+        },
+        "alerts": {
+            "signal_family": POLARIZATION,
+            "production_rule": "triggered_detection_results_only",
+            "count": len(alert_rows),
+            "future_association_status": "not_executed",
         },
         "downstream": {
             "event_candidates_created": False,
@@ -289,11 +334,13 @@ def run_polarization_detection_runtime(
     return PolarizationDetectionRuntimeArtifacts(
         result_path=result_path,
         manifest_path=manifest_path,
+        alert_path=alert_path,
         routes_count=len(routes),
         observations_available=sum(available.values()),
         observations_skipped_no_value=sum(skipped.values()),
         results_produced=len(rows),
         trigger_count=sum(triggers.values()),
+        alerts_produced=len(alert_rows),
         future_leak_count=future_leak_count,
     )
 
@@ -307,6 +354,7 @@ def _result_row(
     result: DetectionResult,
 ) -> dict[str, Any]:
     return {
+        "detection_result_id": detection_result_id(run_id=run_id, result=result),
         "run_id": run_id,
         "signal_id": result.signal_id,
         "measure_id": observation.metadata["measure_id"],
@@ -332,6 +380,7 @@ def _result_row(
 
 __all__ = [
     "DETECTION_ARTIFACT",
+    "DETECTION_ALERT_ARTIFACT",
     "DETECTION_MANIFEST",
     "METHODOLOGICAL_GAP_STATUS",
     "SUPPORTED_POLARIZATION_DETECTORS",

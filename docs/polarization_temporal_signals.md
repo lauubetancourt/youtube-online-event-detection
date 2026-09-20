@@ -195,8 +195,8 @@ state is never shared across ER, EMDPol, and MEC, even when they use the same de
 type. Only `VALUE_AVAILABLE` observations with finite values are dispatched.
 `NO_INPUT`, `NO_CLASSIFIABLE_OPINIONS`, and `NO_REPRESENTABLE_AUTHORS` produce no
 `DetectionResult`, do not increment detector counters, and leave state unchanged.
-No value is imputed and no reset is performed. The long-gap/reset policy remains
-methodologically open.
+No value is imputed and no reset is performed. This is now the explicit
+`preserve_state_v1` policy; its methodological status remains `NOT_CALIBRATED`.
 
 The detector consumes the scalar level produced by a measure, not the underlying
 opinion distribution or support. Signal window, signal cadence, and detector internal
@@ -204,6 +204,12 @@ history are separate concepts. Page-Hinkley, ADWIN, and KSWIN are technically
 available for any configured polarization signal; none is selected as the final or
 default detector. A zero-trigger execution is valid. The runtime performs no
 association, candidate promotion, or RAG operation.
+
+Triggered results additionally produce one neutral `DetectionAlert`; non-triggered
+results never do. The alert preserves the signal's own observation timestamp and
+explicitly labels the family as `POLARIZATION`. It is not an `EventCandidate` and no
+cross-branch association is performed. See
+[detection alerts and gap policy](detection_alerts_and_gap_policy.md).
 
 ## Synthetic coverage and backlog
 
@@ -217,9 +223,11 @@ Values are compared against the existing adapters, not ranked scientifically.
   routing, and the opt-in polarization runtime through `DetectionResult`.
 - RESOLVED: [standalone classifier technical integration](stance_classifier.md) and
   its persisted handoff to the standalone temporal runtime.
-- NEXT: define the detection-alert contract and methodological gap/reset policy.
+- RESOLVED: deterministic neutral detection-alert contract and provisional
+  `preserve_state_v1` gap policy.
+- NEXT: temporal association of activity and polarization alerts.
 - OPEN: classifier validation, proposition discovery, window/cadence
-  selection, support threshold, detector gap/reset policy,
+  selection, support threshold, empirical gap-policy calibration/reset criteria,
   activity/polarization timestamp association, measure/detector calibration.
 - OPEN: `PREPROCESSING-EVAL`, dataset config consolidation, unified artifact traceability,
   output isolation, profile duplication, experimental fingerprint/config_hash semantics,

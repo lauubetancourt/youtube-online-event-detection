@@ -127,6 +127,7 @@ class CyclicActivityDetectionRuntimeTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        alerts = _read_jsonl(artifact_dir / "detection_alerts.jsonl")
 
         self.assertEqual(set(summary["stages"]), {
             "ingestion",
@@ -174,6 +175,12 @@ class CyclicActivityDetectionRuntimeTests(unittest.TestCase):
         self.assertEqual(manifest["detector_id"], detector_id)
         self.assertEqual(manifest["signal_id"], signal_id)
         self.assertEqual(manifest["counts"]["triggered_results"], 0)
+        self.assertEqual(manifest["counts"]["detection_alerts"], 0)
+        self.assertEqual(alerts, [])
+        self.assertEqual(manifest["gap_policy"]["policy_id"], "preserve_state_v1")
+        self.assertEqual(
+            manifest["gap_policy"]["methodological_status"], "NOT_CALIBRATED"
+        )
         self.assertEqual(manifest["causality"]["future_leak_count"], 0)
         self.assertEqual(manifest["causality"]["duplicate_dispatch_count"], 0)
         self.assertEqual(

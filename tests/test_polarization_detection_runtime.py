@@ -42,7 +42,10 @@ def _payload(
     adwin: dict | None = None,
     kswin: dict | None = None,
 ) -> dict:
-    detection: dict = {"routes": routes}
+    detection: dict = {
+        "routes": routes,
+        "gap_policy": {"policy_id": "preserve_state_v1"},
+    }
     for name, value in (
         ("page_hinkley", page_hinkley),
         ("adwin", adwin),
@@ -159,6 +162,7 @@ class PolarizationDetectionRuntimeTests(unittest.TestCase):
             )
             rows = _read_jsonl(artifacts.result_path)
             manifest = json.loads(artifacts.manifest_path.read_text())
+            alerts = _read_jsonl(artifacts.alert_path)
         self.assertEqual(artifacts.results_produced, 6)
         self.assertEqual(artifacts.observations_skipped_no_value, 3)
         self.assertEqual({row["signal_id"] for row in rows}, set(signals))
@@ -173,9 +177,13 @@ class PolarizationDetectionRuntimeTests(unittest.TestCase):
         self.assertEqual([row["quality"] for row in rows[3:]], [
             "degraded", "degraded", "degraded",
         ])
-        self.assertEqual(manifest["gap_policy"]["methodological_status"], "OPEN")
+        self.assertEqual(
+            manifest["gap_policy"]["methodological_status"], "NOT_CALIBRATED"
+        )
         self.assertEqual(manifest["input_policy"]["input_policy_id"], "causal_minimal_v1")
         self.assertEqual(manifest["causality"]["future_leak_count"], 0)
+        self.assertEqual(manifest["counts"]["detection_alerts"], 0)
+        self.assertEqual(alerts, [])
 
     def test_all_no_value_statuses_skip_updates_and_preserve_state(self) -> None:
         config = run_config_from_mapping(_payload(
@@ -269,6 +277,17 @@ class PolarizationDetectionRuntimeTests(unittest.TestCase):
                     config_hash=run_config_hash(config),
                 )
                 self.assertGreater(artifacts.trigger_count, 0)
+                alert_rows = _read_jsonl(artifacts.alert_path)
+                self.assertEqual(len(alert_rows), artifacts.trigger_count)
+                self.assertEqual(
+                    len(alert_rows),
+                    json.loads(artifacts.manifest_path.read_text())["counts"][
+                        "detection_alerts"
+                    ],
+                )
+                self.assertTrue(
+                    all(row["signal_family"] == "POLARIZATION" for row in alert_rows)
+                )
 
     def test_routing_and_parameter_changes_change_config_hash(self) -> None:
         base = _payload(
@@ -366,6 +385,7 @@ class PolarizationDetectionRuntimeTests(unittest.TestCase):
                     "esteban_ray": {}, "emd_pol": {}, "mec": {},
                 },
                 "detection": {
+                    "gap_policy": {"policy_id": "preserve_state_v1"},
                     "routes": {
                         "polarization_mec": {"detector_id": "kswin"},
                         "polarization_esteban_ray": {"detector_id": "adwin"},
@@ -386,12 +406,14 @@ class PolarizationDetectionRuntimeTests(unittest.TestCase):
             manifest = json.loads((output / DETECTION_MANIFEST).read_text())
             runtime_manifest = json.loads(artifacts.manifest_path.read_text())
             result_rows = _read_jsonl(output / DETECTION_ARTIFACT)
+            alert_rows = _read_jsonl(artifacts.detection_alert_path)
         self.assertEqual(artifacts.detection_result_count, 9)
         self.assertEqual(artifacts.detection_trigger_count, 0)
         self.assertEqual(manifest["input_policy"]["input_policy_id"], "causal_minimal_v1")
         self.assertFalse(manifest["downstream"]["event_candidates_created"])
         self.assertTrue(runtime_manifest["downstream"]["detectors_executed"])
         self.assertEqual(len(result_rows), 9)
+        self.assertEqual(alert_rows, [])
 
 
 if __name__ == "__main__":

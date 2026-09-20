@@ -24,6 +24,7 @@ from youtube_pipeline.detectors import (
     XiaoEMAConfig,
     get_detector_names,
 )
+from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
@@ -220,6 +221,7 @@ class DetectionConfig:
 
     activity_route: ActivityDetectionRouteConfig | None = None
     routes: tuple[ActivityDetectionRouteConfig, ...] | None = None
+    gap_policy: DetectionGapPolicyConfig | None = None
     connector: CyclicDetectionConnectorConfig | None = None
     xiao_ema: XiaoEMAConfig | None = None
     page_hinkley: PageHinkleyConfig | None = None
@@ -244,6 +246,9 @@ class DetectionConfig:
             if len({route.signal_id for route in routes}) != len(routes):
                 raise ValueError("routes must contain unique signal_id values.")
             object.__setattr__(self, "routes", routes)
+        _require_optional_instance(
+            "gap_policy", self.gap_policy, DetectionGapPolicyConfig
+        )
         _require_optional_instance(
             "connector",
             self.connector,

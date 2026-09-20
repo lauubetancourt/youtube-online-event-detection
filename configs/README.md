@@ -147,6 +147,7 @@ polarization levels without assigning any detector as the methodological default
 ```json
 {
   "detection": {
+    "gap_policy": {"policy_id": "preserve_state_v1"},
     "routes": {
       "polarization_mec": {"detector_id": "kswin"},
       "polarization_esteban_ray": {"detector_id": "adwin"},
@@ -164,6 +165,12 @@ configuration and therefore in `config_hash`. Polarization detection remains
 opt-in; absent values are skipped without updating or resetting detector state.
 That gap behavior is the current technical policy, not a calibrated methodological
 decision.
+
+`preserve_state_v1` makes the existing absent-observation behavior explicit: no
+detector update, no reset and no imputation. It is provisional and not calibrated.
+Legacy profiles may omit it without changing behavior; new polarization experiments
+should declare it so the policy participates in resolved configuration and
+`config_hash`.
 
 The development profile
 `configs/development/polarization_detection_runtime_smoke.json` reads Silver through

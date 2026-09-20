@@ -187,6 +187,7 @@ boundary without becoming part of the activity runtime:
 Silver → causal_minimal_v1 → StanceCommentInput → CommentStance
 → OpinionDistribution(t) → ER / EMDPol / MEC → SignalObservation(t)
 → configured Page-Hinkley / ADWIN / KSWIN → DetectionResult
+→ DetectionAlert when triggered
 ```
 
 `detection.routes` supplies `signal_id → detector_id`; there is no measure-specific
@@ -194,8 +195,15 @@ branch or official detector assignment. `SignalObservation` enters detection thr
 the `NumericObservation` boundary rather than being relabeled as
 `ActivityObservation`. One detector instance is maintained per signal route for the
 execution. Observations without values are not dispatched and do not reset state;
-the methodological long-gap policy is still open. The branch stops at
+V1 explicitly preserves detector state, while empirical calibration of long-gap
+behavior remains open. The branch stops at
 `DetectionResult`: no activity/polarization association or candidate fusion occurs.
+
+Triggered results may now be projected into a neutral `DetectionAlert` carrying an
+explicit `ACTIVITY` or `POLARIZATION` family, deterministic identity, support and
+runtime lineage. Non-triggered results remain persisted but produce no alert. Alerts
+are inputs for a future timestamp-association layer, not event candidates. See
+[detection alerts and gap policy](detection_alerts_and_gap_policy.md).
 
 The three distinct temporal concepts remain independent: the signal window selects
 comments, the signal cadence emits values, and a detector's internal window/history

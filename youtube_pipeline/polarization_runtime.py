@@ -24,6 +24,7 @@ from youtube_pipeline.experimental_input import (
 )
 from youtube_pipeline.polarization_signal_composition import create_configured_polarization_signal
 from youtube_pipeline.polarization_detection_runtime import (
+    DETECTION_ALERT_ARTIFACT,
     DETECTION_ARTIFACT,
     DETECTION_MANIFEST,
     configured_polarization_routes,
@@ -103,6 +104,8 @@ class PolarizationRuntimeArtifacts:
     detection_manifest_path: Path | None = None
     detection_result_count: int = 0
     detection_trigger_count: int = 0
+    detection_alert_path: Path | None = None
+    detection_alert_count: int = 0
 
 
 def _require_runtime_config(config: RunConfig):
@@ -342,7 +345,11 @@ async def run_polarization_runtime(
     )]
     detection_routes = configured_polarization_routes(actual)
     detection_paths = (
-        [root / DETECTION_ARTIFACT, root / DETECTION_MANIFEST]
+        [
+            root / DETECTION_ARTIFACT,
+            root / DETECTION_MANIFEST,
+            root / DETECTION_ALERT_ARTIFACT,
+        ]
         if detection_routes else []
     )
     classifier_paths = [root / name for name in (
@@ -453,6 +460,9 @@ async def run_polarization_runtime(
             "polarization_detection_manifest": (
                 DETECTION_MANIFEST if detection_artifacts is not None else None
             ),
+            "detection_alerts": (
+                DETECTION_ALERT_ARTIFACT if detection_artifacts is not None else None
+            ),
         },
         "downstream": {
             "detectors_executed": detection_artifacts is not None,
@@ -462,6 +472,10 @@ async def run_polarization_runtime(
             ),
             "detection_triggers": (
                 detection_artifacts.trigger_count
+                if detection_artifacts is not None else 0
+            ),
+            "detection_alerts": (
+                detection_artifacts.alerts_produced
                 if detection_artifacts is not None else 0
             ),
             "event_candidates_created": False,
@@ -488,6 +502,14 @@ async def run_polarization_runtime(
         ),
         (
             detection_artifacts.trigger_count
+            if detection_artifacts is not None else 0
+        ),
+        (
+            detection_artifacts.alert_path
+            if detection_artifacts is not None else None
+        ),
+        (
+            detection_artifacts.alerts_produced
             if detection_artifacts is not None else 0
         ),
     )

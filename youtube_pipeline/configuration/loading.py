@@ -24,6 +24,7 @@ from youtube_pipeline.daily_rag_consumer import DailyRagConsumerConfig
 from youtube_pipeline.daily_rag_sidecars import DailyRagSidecarBuildConfig
 from youtube_pipeline.data_extraction import ExtractionConfig
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_measures import (
@@ -71,6 +72,7 @@ _SIGNALS_FIELDS = {"daily", "activity", "polarization"}
 _DETECTION_FIELDS = {
     "activity_route",
     "routes",
+    "gap_policy",
     "connector",
     "xiao_ema",
     "page_hinkley",
@@ -366,6 +368,15 @@ def _build_detection(payload: Any) -> DetectionConfig:
     return DetectionConfig(
         activity_route=activity_route,
         routes=routes,
+        gap_policy=(
+            _build_component(
+                DetectionGapPolicyConfig,
+                section["gap_policy"],
+                "detection.gap_policy",
+            )
+            if "gap_policy" in section
+            else None
+        ),
         connector=(
             _build_component(
                 CyclicDetectionConnectorConfig,

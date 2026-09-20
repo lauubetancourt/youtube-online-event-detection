@@ -146,6 +146,7 @@ def _with_output_root(
     relocated_detection = DetectionConfig(
         activity_route=detection.activity_route,
         routes=detection.routes,
+        gap_policy=detection.gap_policy,
         connector=replace(
             detection.connector,
             simulation_dir=output_root,
@@ -341,6 +342,8 @@ def run_cyclic_pipeline(resolved: ResolvedRunConfig) -> dict[str, Any]:
             activity_route=detection.activity_route,
             signal_definition=signals.activity,
             detector_config=detector_config,
+            config_hash=resolved.config_hash,
+            gap_policy=detection.gap_policy,
         )
     else:
         assert signals.daily is not None

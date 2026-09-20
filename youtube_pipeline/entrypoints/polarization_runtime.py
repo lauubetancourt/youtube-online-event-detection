@@ -72,6 +72,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "measure_observations": artifacts.observation_count,
         "detection_results": artifacts.detection_result_count,
         "detection_triggers": artifacts.detection_trigger_count,
+        "detection_alerts": artifacts.detection_alert_count,
         "detection_artifact": (
             str(artifacts.detection_result_path)
             if artifacts.detection_result_path is not None else None
@@ -79,6 +80,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         "detection_manifest": (
             str(artifacts.detection_manifest_path)
             if artifacts.detection_manifest_path is not None else None
+        ),
+        "detection_alert_artifact": (
+            str(artifacts.detection_alert_path)
+            if artifacts.detection_alert_path is not None else None
         ),
     }, ensure_ascii=False))
 
