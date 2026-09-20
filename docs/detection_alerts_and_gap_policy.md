@@ -130,6 +130,9 @@ those leading gaps, G0, G1, G2 and G3 would all begin the first effective segmen
 
 The existing `EventCandidate` is activity-specific because it embeds
 `ActivityObservation` and an evidence window. It can continue serving legacy paths.
-Future association should consume `DetectionAlert` records, then create or adapt a
-candidate after timestamp-based association. No `EventCandidate`, evidence package,
-RAG artifact, candidate taxonomy or association tolerance is created in this phase.
+The next implemented boundaries consume `DetectionAlert` records into deterministic,
+bounded `DetectionAssociation` groups and project finalized groups into the separate
+neutral `AssociatedEventCandidate`. The legacy `EventCandidate` remains unchanged;
+evidence policy and RAG remain downstream. See
+[temporal detection association](temporal_detection_association.md) and
+[neutral event-candidate projection](event_candidate_fusion.md).

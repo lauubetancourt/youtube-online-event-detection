@@ -7,6 +7,10 @@ from youtube_pipeline.activity_detection import (
 )
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
 from youtube_pipeline.detection_alerts import DetectionAlert, DetectionGapPolicyConfig
+from youtube_pipeline.detection_association import (
+    DetectionAssociation,
+    DetectionAssociationConfig,
+)
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.stance_classifier import (
     CommentStanceClassifierConfig, ClassifierRetryPolicy, StanceProposition,
@@ -51,6 +55,8 @@ __all__ = [
     "DetectionConfig",
     "DetectionAlert",
     "DetectionGapPolicyConfig",
+    "DetectionAssociation",
+    "DetectionAssociationConfig",
     "EMDPolConfig",
     "ExperimentalInputPolicyConfig",
     "EstebanRayConfig",

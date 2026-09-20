@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from numbers import Integral
+from pathlib import Path
 from typing import Any
 
 from youtube_pipeline.activity_detection import DetectionResult
@@ -113,6 +114,46 @@ class DetectionAlert:
         payload["data_cutoff_utc"] = self.data_cutoff_utc.isoformat()
         return payload
 
+    @classmethod
+    def from_mapping(cls, payload: dict[str, Any]) -> DetectionAlert:
+        if not isinstance(payload, dict):
+            raise TypeError("DetectionAlert payload must be an object.")
+        expected = {
+            "alert_id",
+            "detection_result_id",
+            "detection_result_ref",
+            "run_id",
+            "config_hash",
+            "signal_id",
+            "signal_family",
+            "detector_id",
+            "alert_time_utc",
+            "data_cutoff_utc",
+            "triggered",
+            "quality",
+            "support_count",
+        }
+        unknown = set(payload) - expected
+        missing = expected - set(payload)
+        if unknown:
+            raise ValueError(f"Unknown DetectionAlert fields: {sorted(unknown)}")
+        if missing:
+            raise ValueError(f"Missing DetectionAlert fields: {sorted(missing)}")
+
+        def parse_time(name: str) -> datetime:
+            value = payload[name]
+            if not isinstance(value, str):
+                raise TypeError(f"{name} must be an ISO-8601 string.")
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(f"{name} must be a valid ISO-8601 datetime.") from exc
+
+        normalized = dict(payload)
+        normalized["alert_time_utc"] = parse_time("alert_time_utc")
+        normalized["data_cutoff_utc"] = parse_time("data_cutoff_utc")
+        return cls(**normalized)
+
 
 def detection_result_id(*, run_id: str, result: DetectionResult) -> str:
     _require_text("run_id", run_id)
@@ -174,6 +215,24 @@ def detection_alert_from_result(
     )
 
 
+def load_detection_alerts(path: str | Path) -> tuple[DetectionAlert, ...]:
+    source = Path(path)
+    alerts: list[DetectionAlert] = []
+    for line_number, line in enumerate(
+        source.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid DetectionAlert JSON on line {line_number}."
+            ) from exc
+        alerts.append(DetectionAlert.from_mapping(payload))
+    return tuple(alerts)
+
+
 __all__ = [
     "ACTIVITY",
     "GAP_POLICY_METHODOLOGICAL_STATUS",
@@ -184,4 +243,5 @@ __all__ = [
     "DetectionGapPolicyConfig",
     "detection_alert_from_result",
     "detection_result_id",
+    "load_detection_alerts",
 ]

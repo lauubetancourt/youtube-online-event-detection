@@ -18,6 +18,8 @@ RunConfig
 ├── simulation
 ├── signals
 ├── detection
+├── association
+├── polarization
 ├── rag
 └── artifacts
 ```
@@ -171,6 +173,22 @@ detector update, no reset and no imputation. It is provisional and not calibrate
 Legacy profiles may omit it without changing behavior; new polarization experiments
 should declare it so the policy participates in resolved configuration and
 `config_hash`.
+
+Timestamp association of triggered activity and polarization alerts is a separate,
+opt-in stage. A development-only example is:
+
+```json
+{
+  "association": {
+    "policy_id": "bounded_temporal_clusters_v1",
+    "tolerance": "5min",
+    "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
+  }
+}
+```
+
+The tolerance is an experimental parameter and is not derived from signal windows or
+cadences. The stage writes neutral associations and does not create event candidates.
 
 The development profile
 `configs/development/polarization_detection_runtime_smoke.json` reads Silver through

@@ -25,6 +25,7 @@ from youtube_pipeline.daily_rag_sidecars import DailyRagSidecarBuildConfig
 from youtube_pipeline.data_extraction import ExtractionConfig
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
 from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
+from youtube_pipeline.detection_association import DetectionAssociationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_measures import (
@@ -59,6 +60,7 @@ _ROOT_FIELDS = {
     "simulation",
     "signals",
     "detection",
+    "association",
     "polarization",
     "rag",
     "artifacts",
@@ -550,6 +552,15 @@ def run_config_from_mapping(
         detection=(
             _build_detection(root["detection"])
             if "detection" in root
+            else None
+        ),
+        association=(
+            _build_component(
+                DetectionAssociationConfig,
+                root["association"],
+                "association",
+            )
+            if "association" in root
             else None
         ),
         polarization=(

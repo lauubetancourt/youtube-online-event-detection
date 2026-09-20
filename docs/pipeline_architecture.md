@@ -173,10 +173,10 @@ score                   # optional and method-specific
 detector_metadata       # method-specific state/evidence
 ```
 
-`DetectionResult.triggered=true` does not confirm an event. `EventCandidate`
-promotes that result with a candidate ID, causal evidence interval, minimal lineage,
-and optional lifecycle. It deliberately excludes comments, videos, context units,
-prompts, and validation outputs.
+`DetectionResult.triggered=true` does not confirm an event. The legacy
+`EventCandidate` promotes one activity result with an evidence interval. The new
+`AssociatedEventCandidate` instead projects one finalized cross-signal association
+with alert-ID lineage and deliberately leaves evidence-window policy downstream.
 
 ### Polarization runtime boundary
 
@@ -188,6 +188,8 @@ Silver → causal_minimal_v1 → StanceCommentInput → CommentStance
 → OpinionDistribution(t) → ER / EMDPol / MEC → SignalObservation(t)
 → configured Page-Hinkley / ADWIN / KSWIN → DetectionResult
 → DetectionAlert when triggered
+→ DetectionAssociation after causal timestamp buffering
+→ AssociatedEventCandidate after deterministic one-to-one projection
 ```
 
 `detection.routes` supplies `signal_id → detector_id`; there is no measure-specific
@@ -196,22 +198,28 @@ the `NumericObservation` boundary rather than being relabeled as
 `ActivityObservation`. One detector instance is maintained per signal route for the
 execution. Observations without values are not dispatched and do not reset state;
 V1 explicitly preserves detector state, while empirical calibration of long-gap
-behavior remains open. The branch stops at
-`DetectionResult`: no activity/polarization association or candidate fusion occurs.
+behavior remains open. Detection, association, and candidate projection remain
+separate runtime boundaries; none retrieves evidence or validates an event.
 
 Triggered results may now be projected into a neutral `DetectionAlert` carrying an
 explicit `ACTIVITY` or `POLARIZATION` family, deterministic identity, support and
 runtime lineage. Non-triggered results remain persisted but produce no alert. Alerts
-are inputs for a future timestamp-association layer, not event candidates. See
-[detection alerts and gap policy](detection_alerts_and_gap_policy.md).
+now enter an optional bounded timestamp-association layer. That layer produces
+`DetectionAssociation` and never assumes shared tick or cycle indexes. A finalized
+association can then produce exactly one neutral `AssociatedEventCandidate`, without
+reapplying Δ or combining scores. See
+[detection alerts and gap policy](detection_alerts_and_gap_policy.md),
+[temporal detection association](temporal_detection_association.md), and
+[neutral event-candidate projection](event_candidate_fusion.md).
 
 The three distinct temporal concepts remain independent: the signal window selects
 comments, the signal cadence emits values, and a detector's internal window/history
 operates over those emitted scalar values.
 
-The contracts and promotion helper are implemented and tested. The general
-production path does not yet use `EventCandidate` as the handoff to RAG. Existing
-retrospective and daily event records remain the active compatibility contracts.
+Both legacy and neutral candidate contracts are implemented and tested. The general
+production path does not yet use the neutral candidate as the handoff to RAG.
+Existing retrospective and daily event records remain the active compatibility
+contracts.
 
 See [activity signal semantics](activity_signal_semantics.md) for the normative A6
 details.
@@ -394,7 +402,8 @@ and do not treat those locations as scientific authorities.
 | Signal→detector routing | IMPLEMENTED_AND_ACTIVE | Used by the technical cyclic activity runtime; compatibility paths remain separate |
 | XIAO EMA | REFERENCE_COMPATIBILITY | Active reference detector and historical trigger lifecycle |
 | `DetectionResult` | IMPLEMENTED_AND_ACTIVE | Persisted as neutral runtime envelopes; historical XIAO persistence remains separate |
-| `EventCandidate` | IMPLEMENTED_NOT_YET_CONNECTED | Internal contract and compatibility projection tested |
+| Legacy `EventCandidate` | IMPLEMENTED_NOT_YET_CONNECTED | Activity-specific internal contract kept unchanged |
+| `AssociatedEventCandidate` | IMPLEMENTED_NOT_YET_CONNECTED | Neutral finalized-association projection; evidence policy remains downstream |
 | Daily frequency baseline | IMPLEMENTED_AND_ACTIVE | Specialized daily point-candidate path |
 | Retrospective RAG evidence/sidecars | IMPLEMENTED_AND_ACTIVE | Current reference contracts |
 | Daily RAG sidecars/consumer/selection | IMPLEMENTED_AND_ACTIVE | Non-generative daily chain |

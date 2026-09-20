@@ -153,6 +153,7 @@ def _with_output_root(config: RunConfig, *, output_root: Path) -> RunConfig:
         simulation=config.simulation,
         signals=config.signals,
         detection=config.detection,
+        association=config.association,
         rag=relocated_rag,
         artifacts=config.artifacts,
     )

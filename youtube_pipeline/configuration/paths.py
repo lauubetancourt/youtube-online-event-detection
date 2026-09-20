@@ -478,6 +478,7 @@ def resolve_run_config_paths(
         simulation=simulation,
         signals=signals,
         detection=detection,
+        association=config.association,
         polarization=polarization,
         rag=rag,
         artifacts=config.artifacts,

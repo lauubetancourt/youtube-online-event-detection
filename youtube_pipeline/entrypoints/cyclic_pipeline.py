@@ -182,6 +182,7 @@ def _with_output_root(
         simulation=relocated_simulation,
         signals=relocated_signals,
         detection=relocated_detection,
+        association=config.association,
         polarization=config.polarization,
         rag=config.rag,
         artifacts=config.artifacts,

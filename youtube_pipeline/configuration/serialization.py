@@ -103,7 +103,9 @@ _OMITTED_NONE_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
         {"activity_route", "routes", "gap_policy", "xiao_ema", "page_hinkley", "adwin", "kswin"}
     ),
     PolarizationConfig: frozenset({"measure_id", "esteban_ray", "emd_pol", "mec", "classifier", "runtime"}),
-    RunConfig: frozenset({"data", "polarization", "rag", "artifacts"}),
+    RunConfig: frozenset(
+        {"data", "association", "polarization", "rag", "artifacts"}
+    ),
     SignalsConfig: frozenset({"daily", "activity", "polarization"}),
     SimulationConfig: frozenset({"replay"}),
 }

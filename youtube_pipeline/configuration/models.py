@@ -25,6 +25,7 @@ from youtube_pipeline.detectors import (
     get_detector_names,
 )
 from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
+from youtube_pipeline.detection_association import DetectionAssociationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
@@ -445,6 +446,7 @@ class RunConfig:
     polarization: PolarizationConfig | None = None
     rag: RagConfig | None = None
     artifacts: ArtifactsConfig | None = None
+    association: DetectionAssociationConfig | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, RunIdentityConfig):
@@ -453,6 +455,9 @@ class RunConfig:
         _require_optional_instance("simulation", self.simulation, SimulationConfig)
         _require_optional_instance("signals", self.signals, SignalsConfig)
         _require_optional_instance("detection", self.detection, DetectionConfig)
+        _require_optional_instance(
+            "association", self.association, DetectionAssociationConfig
+        )
         _require_optional_instance(
             "polarization",
             self.polarization,
@@ -511,6 +516,7 @@ class RunConfig:
                 self.simulation,
                 self.signals,
                 self.detection,
+                self.association,
                 self.polarization,
                 self.rag,
             )

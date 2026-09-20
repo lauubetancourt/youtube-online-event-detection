@@ -225,12 +225,15 @@ Values are compared against the existing adapters, not ranked scientifically.
   its persisted handoff to the standalone temporal runtime.
 - RESOLVED: deterministic neutral detection-alert contract and provisional
   `preserve_state_v1` gap policy.
-- NEXT: temporal association of activity and polarization alerts.
+- RESOLVED: causal bounded timestamp association of activity and polarization alerts.
+- RESOLVED: neutral EventCandidate fusion from finalized associations with
+  deterministic identity and complete alert-ID lineage.
+- NEXT: EventCandidate evidence-window and canonical-source policy.
 - OPEN: classifier validation, proposition discovery, window/cadence
   selection, support threshold, empirical gap-policy calibration/reset criteria,
-  activity/polarization timestamp association, measure/detector calibration.
+  association tolerance calibration, measure/detector calibration.
 - OPEN: `PREPROCESSING-EVAL`, dataset config consolidation, unified artifact traceability,
   output isolation, profile duplication, experimental fingerprint/config_hash semantics,
-  EventCandidate runtime handoff.
+  evidence inventory/source alignment for the new candidate handoff.
 - DEFERRED: A9 durability/late arrivals, retrospective modernization, daily-baseline and
   XIAO-specific studies. No downstream evidence/RAG work is performed here.
