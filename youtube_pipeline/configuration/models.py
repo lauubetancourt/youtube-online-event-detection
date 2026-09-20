@@ -24,8 +24,10 @@ from youtube_pipeline.detectors import (
     XiaoEMAConfig,
     get_detector_names,
 )
+from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
+from youtube_pipeline.polarization_runtime_config import PolarizationRuntimeConfig
 from youtube_pipeline.polarization_measures import (
     EMD_POL_MEASURE,
     ESTEBAN_RAY_MEASURE,
@@ -125,6 +127,7 @@ class DataConfig:
     local_files: LocalFilesConfig | None = None
     prepared_dataset: PreparedDatasetConfig | None = None
     cleaning: CleaningConfig | None = None
+    experimental_input: ExperimentalInputPolicyConfig | None = None
 
     def __post_init__(self) -> None:
         _require_optional_instance("youtube_api", self.youtube_api, ExtractionConfig)
@@ -135,6 +138,11 @@ class DataConfig:
             PreparedDatasetConfig,
         )
         _require_optional_instance("cleaning", self.cleaning, CleaningConfig)
+        _require_optional_instance(
+            "experimental_input",
+            self.experimental_input,
+            ExperimentalInputPolicyConfig,
+        )
         configured_sources = sum(
             source is not None
             for source in (
@@ -211,6 +219,7 @@ class DetectionConfig:
     """Composition of implemented detector configurations."""
 
     activity_route: ActivityDetectionRouteConfig | None = None
+    routes: tuple[ActivityDetectionRouteConfig, ...] | None = None
     connector: CyclicDetectionConnectorConfig | None = None
     xiao_ema: XiaoEMAConfig | None = None
     page_hinkley: PageHinkleyConfig | None = None
@@ -224,6 +233,17 @@ class DetectionConfig:
             self.activity_route,
             ActivityDetectionRouteConfig,
         )
+        if self.routes is not None:
+            if not isinstance(self.routes, (list, tuple)):
+                raise TypeError("routes must be a list or tuple of signal routes.")
+            routes = tuple(self.routes)
+            if not routes:
+                raise ValueError("routes must be nonempty when provided.")
+            if any(not isinstance(route, ActivityDetectionRouteConfig) for route in routes):
+                raise TypeError("routes must contain ActivityDetectionRouteConfig values.")
+            if len({route.signal_id for route in routes}) != len(routes):
+                raise ValueError("routes must contain unique signal_id values.")
+            object.__setattr__(self, "routes", routes)
         _require_optional_instance(
             "connector",
             self.connector,
@@ -246,26 +266,33 @@ class DetectionConfig:
             self.daily_frequency,
             DailyFrequencyBaselineConfig,
         )
-        if self.activity_route is not None:
-            available_detectors = get_detector_names()
-            if self.activity_route.detector_id not in available_detectors:
+        configured_routes = (
+            ((self.activity_route,) if self.activity_route is not None else ())
+            + (self.routes or ())
+        )
+        available_detectors = get_detector_names()
+        configured_detectors = set()
+        if self.xiao_ema is not None:
+            configured_detectors.add("xiao_ema")
+        if self.page_hinkley is not None:
+            configured_detectors.add("page_hinkley")
+        if self.adwin is not None:
+            configured_detectors.add("adwin")
+        if self.kswin is not None:
+            configured_detectors.add("kswin")
+        for route in configured_routes:
+            if route.detector_id not in available_detectors:
                 available = ", ".join(available_detectors)
+                route_kind = (
+                    "activity" if route is self.activity_route else "signal"
+                )
                 raise ValueError(
-                    f"Unknown activity detector {self.activity_route.detector_id!r}; "
+                    f"Unknown {route_kind} detector {route.detector_id!r}; "
                     f"available detectors: {available}."
                 )
-            configured_detectors = set()
-            if self.xiao_ema is not None:
-                configured_detectors.add("xiao_ema")
-            if self.page_hinkley is not None:
-                configured_detectors.add("page_hinkley")
-            if self.adwin is not None:
-                configured_detectors.add("adwin")
-            if self.kswin is not None:
-                configured_detectors.add("kswin")
-            if self.activity_route.detector_id not in configured_detectors:
+            if route.detector_id not in configured_detectors:
                 raise ValueError(
-                    "The configured activity route requires a matching detector "
+                    "Each configured route requires a matching detector "
                     "configuration."
                 )
         if (
@@ -288,6 +315,7 @@ class PolarizationConfig:
     emd_pol: EMDPolConfig | None = None
     mec: MECConfig | None = None
     classifier: CommentStanceClassifierConfig | None = None
+    runtime: PolarizationRuntimeConfig | None = None
 
     def __post_init__(self) -> None:
         if self.measure_id is not None and not isinstance(self.measure_id, str):
@@ -307,12 +335,13 @@ class PolarizationConfig:
         _require_optional_instance("emd_pol", self.emd_pol, EMDPolConfig)
         _require_optional_instance("mec", self.mec, MECConfig)
         _require_optional_instance("classifier", self.classifier, CommentStanceClassifierConfig)
+        _require_optional_instance("runtime", self.runtime, PolarizationRuntimeConfig)
         configurations = {
             ESTEBAN_RAY_MEASURE: self.esteban_ray,
             EMD_POL_MEASURE: self.emd_pol,
             MEC_MEASURE: self.mec,
         }
-        if self.measure_id is None and self.classifier is None and not any(value is not None for value in configurations.values()):
+        if self.measure_id is None and self.classifier is None and self.runtime is None and not any(value is not None for value in configurations.values()):
             raise ValueError("PolarizationConfig requires measure parameter blocks.")
         if self.measure_id is not None and configurations[self.measure_id] is None:
             raise ValueError(
@@ -434,6 +463,42 @@ class RunConfig:
                 self.polarization.config_for(measure_id)
         elif self.polarization is not None and self.polarization.measure_id is None and self.polarization.classifier is None:
             raise ValueError("polarization.measure_id is required for isolated measures.")
+        runtime = self.polarization.runtime if self.polarization is not None else None
+        if runtime is not None:
+            if temporal is None:
+                raise ValueError("Polarization runtime requires signals.polarization.")
+            if self.polarization.classifier is None:
+                raise ValueError("Polarization runtime requires polarization.classifier.")
+            if self.data is None or self.data.local_files is None:
+                raise ValueError("Polarization runtime requires data.local_files.")
+            if temporal.proposition_id != self.polarization.classifier.proposition.proposition_id:
+                raise ValueError("Temporal signal and classifier proposition_id must match.")
+            if temporal.classification_run_id != self.identity.run_id:
+                raise ValueError("classification_run_id must equal identity.run_id for an integrated runtime.")
+        routes = self.detection.routes if self.detection is not None else None
+        if routes is not None:
+            polarization_routes = tuple(
+                route for route in routes
+                if route.signal_id.startswith("polarization_")
+            )
+            if polarization_routes and temporal is None:
+                raise ValueError(
+                    "Polarization detection routes require signals.polarization."
+                )
+            if temporal is not None:
+                expected = {
+                    f"polarization_{measure_id}"
+                    for measure_id in temporal.enabled_measures
+                }
+                unknown = sorted(
+                    route.signal_id for route in polarization_routes
+                    if route.signal_id not in expected
+                )
+                if unknown:
+                    raise ValueError(
+                        "Polarization detection routes reference disabled signals: "
+                        f"{unknown}."
+                    )
         if all(
             section is None
             for section in (

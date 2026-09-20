@@ -10,6 +10,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from youtube_pipeline.experimental_input import (
+    ExperimentalInputPolicyConfig,
+    adapt_activity_records,
+    prepare_causal_minimal_batch,
+)
+
 
 LOCAL_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 UTC_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -388,8 +394,10 @@ def _build_cycle_manifests_and_processed_inventory(
     return pd.DataFrame(manifest_rows), processed_inventory
 
 
-def _input_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
-    return [
+def _input_inventory_columns(
+    config: CyclicIngestionConfig, *, include_policy_lineage: bool = False
+) -> list[str]:
+    columns = [
         "simulation_run_id",
         "source_row_id",
         config.comment_id_col,
@@ -408,10 +416,24 @@ def _input_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
         "is_late_arrival",
         "late_arrival_status",
     ]
+    if include_policy_lineage:
+        columns.extend(
+            [
+                "input_policy_id",
+                "input_source_layer",
+                "input_source_path",
+                "input_source_sha256",
+                "input_source_row_index",
+                "input_quality_flags",
+            ]
+        )
+    return columns
 
 
-def _processed_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
-    return [
+def _processed_inventory_columns(
+    config: CyclicIngestionConfig, *, include_policy_lineage: bool = False
+) -> list[str]:
+    columns = [
         "simulation_run_id",
         "cycle_id",
         "cycle_index",
@@ -428,6 +450,18 @@ def _processed_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
         "is_duplicate",
         "is_late_arrival",
     ]
+    if include_policy_lineage:
+        columns.extend(
+            [
+                "input_policy_id",
+                "input_source_layer",
+                "input_source_path",
+                "input_source_sha256",
+                "input_source_row_index",
+                "input_quality_flags",
+            ]
+        )
+    return columns
 
 
 def _normalize_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -531,8 +565,9 @@ def _build_manifest(
     unique_comment_count: int,
     duplicate_row_count: int,
     invalid_timestamp_count: int,
+    input_policy_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    manifest = {
         "simulation_run_id": simulation_run_id,
         "simulation_mode": config.simulation_mode,
         "execution_mode": "dry_run" if config.dry_run else "materialized_partition",
@@ -596,6 +631,9 @@ def _build_manifest(
         "notes": config.notes,
         "params": config.params,
     }
+    if input_policy_manifest is not None:
+        manifest["experimental_input_policy"] = input_policy_manifest
+    return manifest
 
 
 def _build_state(
@@ -624,9 +662,28 @@ def _build_state(
     }
 
 
-def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, Any]:
+def build_cyclic_ingestion_dry_run(
+    config: CyclicIngestionConfig,
+    *,
+    input_policy: ExperimentalInputPolicyConfig | None = None,
+) -> dict[str, Any]:
     config.validate()
     raw_df = _read_table(config.input_path)
+    source_input_rows = len(raw_df)
+    input_policy_manifest = None
+    if input_policy is not None:
+        prepared_batch = prepare_causal_minimal_batch(
+            raw_df,
+            input_policy,
+            source_path=config.input_path,
+        )
+        activity_records = adapt_activity_records(prepared_batch.records)
+        raw_df = (
+            pd.DataFrame([record.to_mapping() for record in activity_records])
+            if activity_records
+            else prepared_batch.dataframe
+        )
+        input_policy_manifest = prepared_batch.manifest
     prepared_df, invalid_timestamp_count = _prepare_comments(raw_df, config)
     simulation_run_id = _deterministic_simulation_run_id(prepared_df, config)
     cycles = _build_cycle_records(prepared_df, config, simulation_run_id)
@@ -636,6 +693,10 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
         assigned_df, cycles, config
     )
     duplicate_row_count = int(assigned_df["is_duplicate"].sum()) if not assigned_df.empty else 0
+    if input_policy_manifest is not None:
+        duplicate_row_count += int(
+            input_policy_manifest["exact_duplicates_suppressed"]
+        )
     future_leak_count = (
         int(cycles_df["future_leak_count"].sum())
         if "future_leak_count" in cycles_df and not cycles_df.empty
@@ -654,11 +715,12 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
         config=config,
         simulation_run_id=simulation_run_id,
         cycles_df=cycles_df,
-        input_rows=len(raw_df),
+        input_rows=source_input_rows,
         valid_rows=len(prepared_df),
         unique_comment_count=len(unique_comment_ids),
         duplicate_row_count=duplicate_row_count,
         invalid_timestamp_count=invalid_timestamp_count,
+        input_policy_manifest=input_policy_manifest,
     )
     state = _build_state(
         config=config,
@@ -673,7 +735,7 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
         invalid_timestamp_count=invalid_timestamp_count,
         duplicate_row_count=duplicate_row_count,
         future_leak_count=future_leak_count,
-        total_rows=len(raw_df),
+        total_rows=source_input_rows,
         valid_rows=len(prepared_df),
     )
 
@@ -687,24 +749,29 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
     _write_csv(
         output_dir / "cycle_input_inventory.csv",
         assigned_df,
-        columns=_input_inventory_columns(config),
+        columns=_input_inventory_columns(
+            config, include_policy_lineage=input_policy_manifest is not None
+        ),
     )
     _write_csv(
         output_dir / "cycle_processed_inventory.csv",
         processed_df,
-        columns=_processed_inventory_columns(config),
+        columns=_processed_inventory_columns(
+            config, include_policy_lineage=input_policy_manifest is not None
+        ),
     )
 
     return {
         "simulation_run_id": simulation_run_id,
         "output_dir": str(output_dir),
         "cycles_total": int(len(cycles_df)),
-        "input_rows": int(len(raw_df)),
+        "input_rows": int(source_input_rows),
         "valid_timestamp_rows": int(len(prepared_df)),
         "unique_comment_count": int(len(unique_comment_ids)),
         "duplicate_row_count": duplicate_row_count,
         "invalid_timestamp_count": invalid_timestamp_count,
         "future_leak_count": future_leak_count,
+        "experimental_input_policy": input_policy_manifest,
         "total_new_comments": int(cycles_df["new_comment_count"].sum())
         if "new_comment_count" in cycles_df
         else 0,

@@ -141,9 +141,12 @@ parciales: no se promete persistencia atómica, reanudación ni idempotencia A9.
 ## Backlog
 
 - RESOLVED: integración técnica standalone del clasificador y persistencia trazable.
-- NEXT: POLARIZATION-CLASSIFIER-VALIDATION; la precisión no se deduce de mocks.
-- OPEN: proposition discovery, runtime real de polarización, validación/calibración,
-  preprocessing, detector gap/reset policy, asociación/fusión y deudas de config/hash.
+- RESOLVED: equivalencia semántica aceptable con el notebook de referencia y handoff
+  persistido al runtime temporal standalone.
+- NEXT: `PREPROCESSING-EVAL` antes de ampliar afirmaciones metodológicas; la precisión
+  no se deduce de equivalencia ni del smoke real.
+- OPEN: proposition discovery, validación in-domain/calibración, preprocessing,
+  detector gap/reset policy, asociación/fusión y deudas de config/hash.
 - OPEN operativo: evaluación de throughput/límites de cuenta y coste opcional;
   no se hereda el tier del notebook legacy.
 - DEFERRED: A9 y durabilidad cross-restart. No cambia actividad/detectores/RAG.

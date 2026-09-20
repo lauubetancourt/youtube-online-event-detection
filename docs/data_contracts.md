@@ -125,6 +125,26 @@ from a single mutable counter.
 - Equal timestamps follow the signal-specific ordering protected by regression
   tests; they are not silently reordered by documentation convention.
 
+## Experimental causal input policy
+
+`causal_minimal_v1` is an opt-in runtime policy for new activity and stance
+executions. It reads the existing Silver comment artifact and applies only schema
+validation, stable typing, UTC validation, exact `comment_id` deduplication,
+deterministic `(event_time_utc, comment_id)` ordering, and source lineage. It
+preserves original text as the semantic authority and does not remove short text,
+emoji, replies, repeated text with distinct IDs, or spam-like observations.
+
+The policy keeps an in-run `seen_comment_ids` set so the same rule works for batch
+preparation and causal replay. Records at or beyond the active cutoff are withheld
+before entering that state. Repeated IDs with different text, author, video,
+event time, or parent are explicit conflicts rather than silently selected rows.
+
+Gold remains unchanged and continues to serve all historical consumers. The new
+policy is activated only through `data.experimental_input`; it creates no new
+medallion layer or permanent materialized view. Activity and stance adapters share
+the resulting comment-ID universe, and future evidence builders can select the
+same configured source path/hash without changing existing RAG sidecars.
+
 ## Prepared dataset contract
 
 A prepared comment dataset used by current replay/cyclic paths must provide, at

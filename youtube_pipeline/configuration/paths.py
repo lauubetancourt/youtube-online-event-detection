@@ -350,6 +350,7 @@ def resolve_run_config_paths(
                 if data.cleaning is not None
                 else None
             ),
+            experimental_input=data.experimental_input,
         )
 
     simulation = config.simulation
@@ -393,6 +394,7 @@ def resolve_run_config_paths(
     if detection is not None:
         detection = DetectionConfig(
             activity_route=detection.activity_route,
+            routes=detection.routes,
             connector=(
                 _resolve_detection_connector(detection.connector, base)
                 if detection.connector is not None

@@ -1,6 +1,6 @@
-# Synthetic temporal polarization signal
+# Temporal polarization signal
 
-**Status:** TECHNICAL_SYNTHETIC_INTEGRATION, not calibrated or scientifically validated.
+**Status:** TECHNICAL_RUNTIME_INTEGRATION, not calibrated or scientifically validated.
 
 ```text
 ordered CommentStance causal prefix
@@ -11,9 +11,11 @@ ordered CommentStance causal prefix
 → one SignalObservation per measure
 ```
 
-This producer is standalone. It is not connected to cyclic ingestion, classifiers,
-detectors, candidates, association, or RAG. Activity's contracts and behavior are
-unchanged. Measures continue to use the pinned `pol_measures` commit
+The producer remains independently testable with synthetic stances. A dedicated
+standalone runtime connects persisted classifier output to it and can optionally
+route available scalar observations to configured neutral detectors. Candidates,
+cross-branch association, and RAG remain disconnected. Activity's contracts and
+behavior are unchanged. Measures continue to use the pinned `pol_measures` commit
 `1efd4fe3f083e478cb91a6f3ca078cad01386a80`; no formulas are copied here.
 
 ## Configuration and composition
@@ -146,14 +148,62 @@ It does not replace `ActivityObservation`. Stable IDs are `polarization_esteban_
 `PolarizationTemporalTick` preserves window, cutoff, shared distribution, selected
 comment IDs (ordered by author ID), measurements, and observations. `to_mapping()`
 on ticks/observations produces JSON-compatible snapshots without modifying state.
-The classification run supplies source-record lineage; retain the resolved config
-beside serialized ticks for grid, coverage, policy, proposition and parameter identity.
-No persistence runner, manifest writer, or real-data artifacts are added in this phase.
+The classification run supplies source-record lineage. The standalone runtime persists
+the resolved config beside distributions and observations so grid, coverage, policy,
+proposition and parameter identity remain reconstructable.
 
 The active buffer drops records before the current window's left edge; author
 selection is recomputed once per tick. An execution-level seen-identity set grows
 with accepted input for duplicate validation. Optimization and durable checkpoints
 remain deferred; no online-memory bound or restart equivalence is claimed.
+
+## Standalone real-input and detector runtime
+
+`scripts/run_polarization_runtime.py` composes the already-existing contracts without
+joining the activity runtime:
+
+```text
+configured local comments
+→ persisted CommentStance
+→ persisted handoff reload
+→ shared OpinionDistribution per tick
+→ ER / EMDPol / MEC
+→ persisted SignalObservation
+→ configured neutral detector (optional)
+→ persisted DetectionResult
+```
+
+Preparation is the default. Real inference requires both `--execute` and an explicit,
+fresh `--output-root`. `polarization.runtime.video_ids` selects an explicit source
+slice; temporal selection remains owned by `signals.polarization`. The source role is
+`PROVISIONAL_RUNTIME_INPUT` for the legacy CSV profile. Opt-in Silver executions use
+`causal_minimal_v1`, `silver_comments_v1`, and `CAUSAL_MINIMAL_V1`. Measure,
+classifier, temporal-signal, and detector parameters remain in separate configuration
+blocks.
+
+Outputs are `comment_stances.jsonl`, `opinion_distributions.jsonl`,
+`polarization_signal_observations.jsonl`, classifier/runtime manifests, and one
+resolved config. When `detection.routes` contains polarization signals, the runtime
+also persists `polarization_detection_results.jsonl` and
+`polarization_detection_manifest.json`. Distribution rows retain selected
+comment/author IDs and stance
+categories, but not comment text. Coverage fractions are diagnostic metadata and do
+not modify formal values.
+
+Each configured route owns one fresh detector instance for the complete execution;
+state is never shared across ER, EMDPol, and MEC, even when they use the same detector
+type. Only `VALUE_AVAILABLE` observations with finite values are dispatched.
+`NO_INPUT`, `NO_CLASSIFIABLE_OPINIONS`, and `NO_REPRESENTABLE_AUTHORS` produce no
+`DetectionResult`, do not increment detector counters, and leave state unchanged.
+No value is imputed and no reset is performed. The long-gap/reset policy remains
+methodologically open.
+
+The detector consumes the scalar level produced by a measure, not the underlying
+opinion distribution or support. Signal window, signal cadence, and detector internal
+history are separate concepts. Page-Hinkley, ADWIN, and KSWIN are technically
+available for any configured polarization signal; none is selected as the final or
+default detector. A zero-trigger execution is valid. The runtime performs no
+association, candidate promotion, or RAG operation.
 
 ## Synthetic coverage and backlog
 
@@ -163,13 +213,13 @@ statuses, missing authors, gaps, and equal distributions with different support.
 Values are compared against the existing adapters, not ranked scientifically.
 
 - RESOLVED: technical synthetic temporal polarization producer and config composition.
-- RESOLVED: [KSWIN technical integration](kswin_integration.md) and synthetic routing
-  checks for all three measures; no complete polarization detector runtime connected.
-- RESOLVED: [standalone classifier technical integration](stance_classifier.md);
-  its JSONL is not connected to temporal runtime in this phase.
-- NEXT: `POLARIZATION-CLASSIFIER-VALIDATION`.
+- RESOLVED: [KSWIN technical integration](kswin_integration.md), neutral PH/ADWIN/KSWIN
+  routing, and the opt-in polarization runtime through `DetectionResult`.
+- RESOLVED: [standalone classifier technical integration](stance_classifier.md) and
+  its persisted handoff to the standalone temporal runtime.
+- NEXT: define the detection-alert contract and methodological gap/reset policy.
 - OPEN: classifier validation, proposition discovery, window/cadence
-  selection, support threshold, detector gap/reset policy, polarization runtime,
+  selection, support threshold, detector gap/reset policy,
   activity/polarization timestamp association, measure/detector calibration.
 - OPEN: `PREPROCESSING-EVAL`, dataset config consolidation, unified artifact traceability,
   output isolation, profile duplication, experimental fingerprint/config_hash semantics,

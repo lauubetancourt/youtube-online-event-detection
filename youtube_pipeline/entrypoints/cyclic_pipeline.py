@@ -141,9 +141,11 @@ def _with_output_root(
             else None
         ),
         activity=signals.activity,
+        polarization=signals.polarization,
     )
     relocated_detection = DetectionConfig(
         activity_route=detection.activity_route,
+        routes=detection.routes,
         connector=replace(
             detection.connector,
             simulation_dir=output_root,
@@ -179,6 +181,7 @@ def _with_output_root(
         simulation=relocated_simulation,
         signals=relocated_signals,
         detection=relocated_detection,
+        polarization=config.polarization,
         rag=config.rag,
         artifacts=config.artifacts,
     )
@@ -249,6 +252,17 @@ def _validate_cyclic_profile(config: RunConfig) -> None:
             "Cyclic pipeline profile is missing required sections: "
             + ", ".join(missing)
         )
+    if (
+        config.data is not None
+        and config.data.experimental_input is not None
+        and config.data.local_files is not None
+        and Path(config.data.local_files.comments_path).absolute()
+        != Path(simulation.ingestion.input_path).absolute()
+    ):
+        raise ValueError(
+            "Opt-in cyclic activity and stance inputs must reference the same "
+            "canonical comments path."
+        )
 
 
 def resolve_cyclic_pipeline_run(
@@ -298,7 +312,14 @@ def run_cyclic_pipeline(resolved: ResolvedRunConfig) -> dict[str, Any]:
     assert detection.connector is not None
 
     stages = {
-        "ingestion": build_cyclic_ingestion_dry_run(simulation.ingestion),
+        "ingestion": build_cyclic_ingestion_dry_run(
+            simulation.ingestion,
+            input_policy=(
+                config.data.experimental_input
+                if config.data is not None
+                else None
+            ),
+        ),
         "orchestration": run_cyclic_orchestrator_dry_run(
             simulation.orchestration
         ),

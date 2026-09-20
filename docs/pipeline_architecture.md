@@ -16,7 +16,8 @@ retrospective and daily online-like execution. It does not yet provide durable
 true-online ingestion.
 
 A trigger means that one configured detector found a relevant change in one
-configured activity signal. It does not prove that a real-world event occurred.
+configured numeric signal. Activity and polarization observations can use the same
+neutral detector boundary. It does not prove that a real-world event occurred.
 G-1 and G-2 are posterior validation stages and do not belong to statistical
 detection.
 
@@ -176,6 +177,29 @@ detector_metadata       # method-specific state/evidence
 promotes that result with a candidate ID, causal evidence interval, minimal lineage,
 and optional lifecycle. It deliberately excludes comments, videos, context units,
 prompts, and validation outputs.
+
+### Polarization runtime boundary
+
+The opt-in polarization branch now reaches the same neutral statistical decision
+boundary without becoming part of the activity runtime:
+
+```text
+Silver → causal_minimal_v1 → StanceCommentInput → CommentStance
+→ OpinionDistribution(t) → ER / EMDPol / MEC → SignalObservation(t)
+→ configured Page-Hinkley / ADWIN / KSWIN → DetectionResult
+```
+
+`detection.routes` supplies `signal_id → detector_id`; there is no measure-specific
+branch or official detector assignment. `SignalObservation` enters detection through
+the `NumericObservation` boundary rather than being relabeled as
+`ActivityObservation`. One detector instance is maintained per signal route for the
+execution. Observations without values are not dispatched and do not reset state;
+the methodological long-gap policy is still open. The branch stops at
+`DetectionResult`: no activity/polarization association or candidate fusion occurs.
+
+The three distinct temporal concepts remain independent: the signal window selects
+comments, the signal cadence emits values, and a detector's internal window/history
+operates over those emitted scalar values.
 
 The contracts and promotion helper are implemented and tested. The general
 production path does not yet use `EventCandidate` as the handoff to RAG. Existing

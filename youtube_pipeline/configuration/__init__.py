@@ -3,8 +3,10 @@
 from youtube_pipeline.activity_detection import (
     ActivityDetectionRouteConfig,
     DetectionResult,
+    SignalDetectionRouteConfig,
 )
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.stance_classifier import (
     CommentStanceClassifierConfig, ClassifierRetryPolicy, StanceProposition,
 )
@@ -41,11 +43,13 @@ __all__ = [
     "ClassifierRetryPolicy",
     "StanceProposition",
     "ActivityDetectionRouteConfig",
+    "SignalDetectionRouteConfig",
     "ArtifactsConfig",
     "canonical_run_config_json",
     "DataConfig",
     "DetectionConfig",
     "EMDPolConfig",
+    "ExperimentalInputPolicyConfig",
     "EstebanRayConfig",
     "DetectionResult",
     "load_run_config",

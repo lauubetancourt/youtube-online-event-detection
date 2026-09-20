@@ -92,6 +92,29 @@ The execution-level manifest records the global `run_id`, run mode, trace level,
 `config_hash`, `resolved_config`, execution mode, and completed stages. It does not
 copy the same configuration into every component artifact.
 
+## Opt-in Silver causal input
+
+New experimental activity or polarization runs may select the minimal causal
+input policy without changing legacy defaults:
+
+```json
+{
+  "data": {
+    "experimental_input": {
+      "policy_id": "causal_minimal_v1",
+      "source": "silver",
+      "exact_comment_id_dedup": true,
+      "semantic_filtering": false
+    }
+  }
+}
+```
+
+The configured comments path (and cyclic ingestion path where applicable) must
+point to the existing Silver artifact. The policy preserves original text, short
+comments, replies, emoji, and repeated text under distinct comment IDs. Gold and
+its existing profiles remain unchanged.
+
 ## Signal-to-detector selection
 
 When a neutral activity route is configured, the association is explicit:
@@ -115,6 +138,37 @@ When a neutral activity route is configured, the association is explicit:
 `XiaoEMAConfig`. The route and loader are implemented and tested, but the integrated
 cyclic compatibility profile has not yet adopted this route as its general runtime
 dispatch.
+
+Neutral multi-signal routes use `detection.routes`. They may be written as a list
+of `{signal_id, detector_id}` objects or as a mapping keyed by signal ID. For
+example, this technical smoke configuration routes three independently produced
+polarization levels without assigning any detector as the methodological default:
+
+```json
+{
+  "detection": {
+    "routes": {
+      "polarization_mec": {"detector_id": "kswin"},
+      "polarization_esteban_ray": {"detector_id": "adwin"},
+      "polarization_emd_pol": {"detector_id": "page_hinkley"}
+    },
+    "page_hinkley": {},
+    "adwin": {},
+    "kswin": {"seed": 42}
+  }
+}
+```
+
+Routes, detector IDs, and detector parameters participate in canonical resolved
+configuration and therefore in `config_hash`. Polarization detection remains
+opt-in; absent values are skipped without updating or resetting detector state.
+That gap behavior is the current technical policy, not a calibrated methodological
+decision.
+
+The development profile
+`configs/development/polarization_detection_runtime_smoke.json` reads Silver through
+`causal_minimal_v1`. Preparation is the default; execution still requires an
+explicit output directory and `--execute`.
 
 Page-Hinkley can be selected explicitly without changing the signal definition:
 
@@ -224,6 +278,23 @@ Run it without overwriting the historical output tree:
   --output-root outputs/cyclic_current \
   --dry-run
 ```
+
+### `development/polarization_runtime_smoke.json`
+
+Selects one small real-comment slice and composes classification with the standalone
+temporal polarization producer. Window/cadence and measure defaults are
+`RUNTIME_SMOKE_NOT_CALIBRATED`; the input remains `PROVISIONAL_RUNTIME_INPUT`.
+Preparation makes no model calls:
+
+```bash
+.venv/bin/python scripts/run_polarization_runtime.py \
+  --config configs/development/polarization_runtime_smoke.json \
+  --output-root outputs/polarization_runtime_smoke \
+  --dry-run
+```
+
+Real inference additionally requires `--execute` and a fresh output directory.
+Detector, association, candidate, and RAG stages are not part of this runner.
 
 ### `compatibility/daily_rag_current.json`
 

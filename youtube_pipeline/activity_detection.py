@@ -135,7 +135,11 @@ class NumericObservationDetector(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ActivityDetectionRouteConfig:
-    """Explicitly associate one activity signal with one detector strategy."""
+    """Associate one numeric signal with one detector strategy.
+
+    The historical name is retained for activity compatibility.  The contract
+    itself is signal-neutral and is also used by temporal polarization routes.
+    """
 
     signal_id: str
     detector_id: str
@@ -165,6 +169,21 @@ def dispatch_activity_observation(
     observation: NumericObservation,
     detectors: Mapping[str, ActivityObservationDetector | NumericObservationDetector],
 ) -> DetectionResult | None:
+    """Compatibility name for :func:`dispatch_numeric_observation`."""
+
+    return dispatch_numeric_observation(
+        route=route,
+        observation=observation,
+        detectors=detectors,
+    )
+
+
+def dispatch_numeric_observation(
+    *,
+    route: ActivityDetectionRouteConfig,
+    observation: NumericObservation,
+    detectors: Mapping[str, ActivityObservationDetector | NumericObservationDetector],
+) -> DetectionResult | None:
     """Route numeric values; explicit absences leave detector state untouched.
 
     Skipping absent values is only a technical dispatch policy, not a decision
@@ -177,7 +196,7 @@ def dispatch_activity_observation(
     signal_id = observation_signal_id(observation)
     if signal_id != route.signal_id:
         raise ValueError(
-            "Observation signal_id does not match the configured activity route."
+            "Observation signal_id does not match the configured numeric route."
         )
     try:
         detector = detectors[route.detector_id]
@@ -209,6 +228,9 @@ def dispatch_activity_observation(
     return result
 
 
+SignalDetectionRouteConfig = ActivityDetectionRouteConfig
+
+
 __all__ = [
     "ActivityObservationDetector",
     "NumericObservation",
@@ -216,6 +238,8 @@ __all__ = [
     "ActivityDetectionRouteConfig",
     "DetectionResult",
     "dispatch_activity_observation",
+    "dispatch_numeric_observation",
     "observation_signal_id",
     "require_numeric_observation",
+    "SignalDetectionRouteConfig",
 ]

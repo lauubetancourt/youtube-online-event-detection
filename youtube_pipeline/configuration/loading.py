@@ -11,6 +11,7 @@ from youtube_pipeline.activity_detection import ActivityDetectionRouteConfig
 from youtube_pipeline.activity_signals import ActivitySignalDefinition
 from youtube_pipeline.stance_classifier import CommentStanceClassifierConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
+from youtube_pipeline.polarization_runtime_config import PolarizationRuntimeConfig
 from youtube_pipeline.cleaning import CleaningConfig
 from youtube_pipeline.cyclic_daily_signals import CyclicDailySignalConfig
 from youtube_pipeline.cyclic_detection_connector import CyclicDetectionConnectorConfig
@@ -23,6 +24,7 @@ from youtube_pipeline.daily_rag_consumer import DailyRagConsumerConfig
 from youtube_pipeline.daily_rag_sidecars import DailyRagSidecarBuildConfig
 from youtube_pipeline.data_extraction import ExtractionConfig
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
+from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_measures import (
     EMDPolConfig,
@@ -60,11 +62,15 @@ _ROOT_FIELDS = {
     "rag",
     "artifacts",
 }
-_DATA_FIELDS = {"youtube_api", "local_files", "prepared_dataset", "cleaning"}
+_DATA_FIELDS = {
+    "youtube_api", "local_files", "prepared_dataset", "cleaning",
+    "experimental_input",
+}
 _SIMULATION_FIELDS = {"ingestion", "orchestration", "stateful_adapter", "replay"}
 _SIGNALS_FIELDS = {"daily", "activity", "polarization"}
 _DETECTION_FIELDS = {
     "activity_route",
+    "routes",
     "connector",
     "xiao_ema",
     "page_hinkley",
@@ -72,7 +78,7 @@ _DETECTION_FIELDS = {
     "kswin",
     "daily_frequency",
 }
-_POLARIZATION_FIELDS = {"measure_id", "esteban_ray", "emd_pol", "mec", "classifier"}
+_POLARIZATION_FIELDS = {"measure_id", "esteban_ray", "emd_pol", "mec", "classifier", "runtime"}
 _RAG_FIELDS = {
     "evidence",
     "sidecars",
@@ -200,6 +206,7 @@ def _build_data(payload: Any) -> DataConfig:
     local_files = None
     prepared_dataset = None
     cleaning = None
+    experimental_input = None
     if "youtube_api" in section:
         component_payload = _require_object(
             section["youtube_api"],
@@ -233,11 +240,18 @@ def _build_data(payload: Any) -> DataConfig:
             section["cleaning"],
             "data.cleaning",
         )
+    if "experimental_input" in section:
+        experimental_input = _build_component(
+            ExperimentalInputPolicyConfig,
+            section["experimental_input"],
+            "data.experimental_input",
+        )
     return DataConfig(
         youtube_api=youtube_api,
         local_files=local_files,
         prepared_dataset=prepared_dataset,
         cleaning=cleaning,
+        experimental_input=experimental_input,
     )
 
 
@@ -326,8 +340,32 @@ def _build_detection(payload: Any) -> DetectionConfig:
             "detection.activity_route",
         )
         activity_route = ActivityDetectionRouteConfig(**route_payload)
+    routes = None
+    if "routes" in section:
+        route_values = section["routes"]
+        if isinstance(route_values, Mapping):
+            mapped_routes = []
+            for signal_id, route_value in route_values.items():
+                location = f"detection.routes.{signal_id}"
+                route_payload = _require_object(route_value, location)
+                _reject_unknown_keys(route_payload, {"detector_id"}, location)
+                mapped_routes.append({
+                    "signal_id": signal_id,
+                    "detector_id": route_payload.get("detector_id"),
+                })
+            route_values = mapped_routes
+        if not isinstance(route_values, (list, tuple)):
+            raise TypeError("detection.routes must be an array or object.")
+        parsed_routes = []
+        for index, route_value in enumerate(route_values):
+            location = f"detection.routes[{index}]"
+            route_payload = _require_object(route_value, location)
+            _reject_unknown_keys(route_payload, {"signal_id", "detector_id"}, location)
+            parsed_routes.append(ActivityDetectionRouteConfig(**route_payload))
+        routes = tuple(parsed_routes)
     return DetectionConfig(
         activity_route=activity_route,
+        routes=routes,
         connector=(
             _build_component(
                 CyclicDetectionConnectorConfig,
@@ -391,6 +429,10 @@ def _build_polarization(payload: Any) -> PolarizationConfig:
         classifier=(
             _build_component(CommentStanceClassifierConfig, section["classifier"], "polarization.classifier")
             if "classifier" in section else None
+        ),
+        runtime=(
+            _build_component(PolarizationRuntimeConfig, section["runtime"], "polarization.runtime")
+            if "runtime" in section else None
         ),
         esteban_ray=(
             _build_component(
