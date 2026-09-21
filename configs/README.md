@@ -434,3 +434,13 @@ The adapter reuses the fixed G-1 and hierarchical G-2 model/prompt contracts.
 Search-day and capacity parameters keep their existing experimental semantics;
 this integration does not calibrate them. Candidate G-2 adds an explicit
 publication-time cutoff while legacy G-2 behavior remains unchanged.
+
+## Causal end-to-end replay
+
+An opt-in run may add `simulation.causal_end_to_end` with `start_utc`, `end_utc`,
+`step`, `output_dir`, compatible precomputed `stance_artifact_path` and
+`stance_manifest_path`, and `parameter_status` set to `TEST_ONLY` or
+`DEVELOPMENT_NOT_CALIBRATED`. Replay step, activity cadence, and polarization
+cadence are independent. The runner composes the existing `causal_minimal_v1`,
+detector routes, association, candidate evidence, and candidate validation
+blocks; it does not change legacy defaults.

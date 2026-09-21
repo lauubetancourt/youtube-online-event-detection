@@ -278,6 +278,50 @@ class EventWindowActivitySignal:
 
         self._buffer: deque[dict[str, Any]] = deque()
         self._next_tick: pd.Timestamp | None = None
+        self._last_advanced_cutoff: pd.Timestamp | None = None
+
+    def start_at(self, start_time_utc: datetime) -> None:
+        """Set the first scheduled tick without inventing a synthetic event.
+
+        This is used by causal replay, where the simulation clock and the
+        signal cadence are independent. Historical lookback events may still
+        be supplied after initialization as long as they precede the first
+        scheduled tick.
+        """
+
+        _require_utc_datetime("start_time_utc", start_time_utc)
+        if self._next_tick is not None or self._buffer:
+            raise RuntimeError("Activity signal scheduling is already initialized.")
+        self._next_tick = _align_timestamp_to_cadence(
+            pd.Timestamp(start_time_utc), self.cadence
+        )
+
+    def advance_to(
+        self,
+        data_cutoff_utc: datetime,
+        *,
+        on_observation: Callable[[ActivityObservation], None] | None = None,
+    ) -> tuple[ActivityObservation, ...]:
+        """Emit every due tick strictly before one causal data cutoff."""
+
+        _require_utc_datetime("data_cutoff_utc", data_cutoff_utc)
+        if self._next_tick is None:
+            raise RuntimeError("Call start_at before advancing an empty signal.")
+        cutoff = pd.Timestamp(data_cutoff_utc)
+        if (
+            self._last_advanced_cutoff is not None
+            and cutoff < self._last_advanced_cutoff
+        ):
+            raise ValueError("Activity signal data cutoffs must not regress.")
+        emitted: list[ActivityObservation] = []
+        while self._next_tick < cutoff:
+            observation = self._build_observation(self._next_tick)
+            emitted.append(observation)
+            if on_observation is not None:
+                on_observation(observation)
+            self._next_tick += self.cadence
+        self._last_advanced_cutoff = cutoff
+        return tuple(emitted)
 
     def on_event(
         self,
@@ -297,6 +341,14 @@ class EventWindowActivitySignal:
             return ()
 
         timestamp = pd.Timestamp(event_ts)
+        if (
+            self._last_advanced_cutoff is not None
+            and timestamp < self._last_advanced_cutoff
+        ):
+            raise ValueError(
+                "Activity event precedes a completed causal prefix; "
+                "late arrivals are unsupported."
+            )
         if self._next_tick is None:
             self._next_tick = _align_timestamp_to_cadence(timestamp, self.cadence)
 

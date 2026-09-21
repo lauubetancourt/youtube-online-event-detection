@@ -43,6 +43,7 @@ from youtube_pipeline.rag_generation_g2_hierarchical import RagG2HierarchicalCon
 from youtube_pipeline.rag_sidecars import RagSidecarBuildConfig
 from youtube_pipeline.rag_validation import RagValidationPrepareConfig
 from youtube_pipeline.storage import LocalFilesConfig
+from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
 
 from .models import (
     ArtifactsConfig,
@@ -71,7 +72,10 @@ _DATA_FIELDS = {
     "youtube_api", "local_files", "prepared_dataset", "cleaning",
     "experimental_input",
 }
-_SIMULATION_FIELDS = {"ingestion", "orchestration", "stateful_adapter", "replay"}
+_SIMULATION_FIELDS = {
+    "ingestion", "orchestration", "stateful_adapter", "replay",
+    "causal_end_to_end",
+}
 _SIGNALS_FIELDS = {"daily", "activity", "polarization"}
 _DETECTION_FIELDS = {
     "activity_route",
@@ -301,6 +305,15 @@ def _build_simulation(payload: Any) -> SimulationConfig:
                 "simulation.replay",
             )
             if "replay" in section
+            else None
+        ),
+        causal_end_to_end=(
+            _build_component(
+                CausalEndToEndReplayConfig,
+                section["causal_end_to_end"],
+                "simulation.causal_end_to_end",
+            )
+            if "causal_end_to_end" in section
             else None
         ),
     )

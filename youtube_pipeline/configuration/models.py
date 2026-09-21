@@ -49,6 +49,7 @@ from youtube_pipeline.rag_generation_g2_hierarchical import RagG2HierarchicalCon
 from youtube_pipeline.rag_sidecars import RagSidecarBuildConfig
 from youtube_pipeline.rag_validation import RagValidationPrepareConfig
 from youtube_pipeline.storage import LocalFilesConfig
+from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
 
 
 RUN_MODE_DEFAULT_TRACE_LEVEL = {
@@ -172,6 +173,7 @@ class SimulationConfig:
     orchestration: CyclicOrchestratorConfig | None = None
     stateful_adapter: CyclicStatefulAdapterConfig | None = None
     replay: ReplayConfig | None = None
+    causal_end_to_end: CausalEndToEndReplayConfig | None = None
 
     def __post_init__(self) -> None:
         _require_optional_instance("ingestion", self.ingestion, CyclicIngestionConfig)
@@ -186,6 +188,11 @@ class SimulationConfig:
             CyclicStatefulAdapterConfig,
         )
         _require_optional_instance("replay", self.replay, ReplayConfig)
+        _require_optional_instance(
+            "causal_end_to_end",
+            self.causal_end_to_end,
+            CausalEndToEndReplayConfig,
+        )
         if all(
             config is None
             for config in (
@@ -193,6 +200,7 @@ class SimulationConfig:
                 self.orchestration,
                 self.stateful_adapter,
                 self.replay,
+                self.causal_end_to_end,
             )
         ):
             raise ValueError("SimulationConfig must configure at least one stage.")
@@ -501,6 +509,55 @@ class RunConfig:
                 raise ValueError("Temporal signal and classifier proposition_id must match.")
             if temporal.classification_run_id != self.identity.run_id:
                 raise ValueError("classification_run_id must equal identity.run_id for an integrated runtime.")
+        causal_replay = (
+            self.simulation.causal_end_to_end
+            if self.simulation is not None
+            else None
+        )
+        if causal_replay is not None:
+            if (
+                self.data is None
+                or self.data.local_files is None
+                or self.data.experimental_input is None
+            ):
+                raise ValueError(
+                    "Causal end-to-end replay requires local Silver files and "
+                    "data.experimental_input."
+                )
+            if self.signals is None or self.signals.activity is None or temporal is None:
+                raise ValueError(
+                    "Causal end-to-end replay requires activity and polarization signals."
+                )
+            if self.detection is None or not (
+                self.detection.routes or self.detection.activity_route
+            ):
+                raise ValueError("Causal end-to-end replay requires detector routes.")
+            if self.association is None:
+                raise ValueError("Causal end-to-end replay requires association config.")
+            if (
+                self.polarization is None
+                or self.polarization.classifier is None
+                or self.polarization.runtime is None
+            ):
+                raise ValueError(
+                    "Causal end-to-end replay requires classifier and runtime lineage config."
+                )
+            if (
+                self.rag is None
+                or self.rag.candidate_evidence is None
+                or self.rag.candidate_validation is None
+            ):
+                raise ValueError(
+                    "Causal end-to-end replay requires candidate evidence and RAG config."
+                )
+            if temporal.classification_run_id != self.identity.run_id:
+                raise ValueError(
+                    "Causal replay classification_run_id must equal identity.run_id."
+                )
+            if temporal.proposition_id != self.polarization.classifier.proposition.proposition_id:
+                raise ValueError(
+                    "Causal replay temporal signal and classifier proposition must match."
+                )
         routes = self.detection.routes if self.detection is not None else None
         if routes is not None:
             polarization_routes = tuple(

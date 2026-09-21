@@ -25,6 +25,7 @@ from youtube_pipeline.rag_generation_g2_hierarchical import RagG2HierarchicalCon
 from youtube_pipeline.rag_sidecars import RagSidecarBuildConfig
 from youtube_pipeline.rag_validation import RagValidationPrepareConfig
 from youtube_pipeline.storage import LocalFilesConfig
+from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
 
 from .models import (
     DataConfig,
@@ -106,6 +107,18 @@ def _resolve_replay(
     return replace(
         config,
         output_snapshots=_resolve_path(config.output_snapshots, base_dir),
+    )
+
+
+def _resolve_causal_end_to_end(
+    config: CausalEndToEndReplayConfig,
+    base_dir: Path,
+) -> CausalEndToEndReplayConfig:
+    return replace(
+        config,
+        output_dir=_resolve_path(config.output_dir, base_dir),
+        stance_artifact_path=_resolve_path(config.stance_artifact_path, base_dir),
+        stance_manifest_path=_resolve_path(config.stance_manifest_path, base_dir),
     )
 
 
@@ -399,6 +412,11 @@ def resolve_run_config_paths(
             replay=(
                 _resolve_replay(simulation.replay, base)
                 if simulation.replay is not None
+                else None
+            ),
+            causal_end_to_end=(
+                _resolve_causal_end_to_end(simulation.causal_end_to_end, base)
+                if simulation.causal_end_to_end is not None
                 else None
             ),
         )

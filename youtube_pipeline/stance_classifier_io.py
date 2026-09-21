@@ -10,6 +10,7 @@ from pathlib import Path
 from youtube_pipeline.configuration.models import RunConfig
 from youtube_pipeline.configuration.paths import resolve_run_config
 from youtube_pipeline.signal_observations import to_json_mapping
+from youtube_pipeline.experimental_input import source_sha256
 from youtube_pipeline.stance_classifier import (
     OpenAICommentStanceClassifier, StanceCommentInput, StanceModelTransport,
 )
@@ -97,6 +98,20 @@ async def run_configured_comment_stance_classification(
                     "input_count": len(inputs), "result_count": len(classifier.records),
                     "counts_by_status": classifier.counts_by_status,
                     "input_ref": input_ref, "artifact_path": str(paths[0]),
+                    "input_policy_id": (
+                        resolved.config.data.experimental_input.policy_id
+                        if resolved.config.data is not None
+                        and resolved.config.data.experimental_input is not None
+                        else None
+                    ),
+                    "input_source_sha256": (
+                        source_sha256(input_ref)
+                        if input_ref is not None and Path(input_ref).exists()
+                        else None
+                    ),
+                    "classified_comment_ids_sha256": hashlib.sha256(
+                        "\n".join(sorted(item.comment_id for item in inputs)).encode("utf-8")
+                    ).hexdigest(),
                     "artifact_sha256": hashlib.sha256(rows.encode("utf-8")).hexdigest(),
                     "resolved_config_path": str(paths[2]), "config_hash": resolved.config_hash,
                     "ordering": "event_time_utc_then_comment_id",

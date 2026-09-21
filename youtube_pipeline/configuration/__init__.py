@@ -14,6 +14,7 @@ from youtube_pipeline.detection_association import (
 from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
 from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
+from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
 from youtube_pipeline.stance_classifier import (
     CommentStanceClassifierConfig, ClassifierRetryPolicy, StanceProposition,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "DetectionAssociationConfig",
     "CandidateEvidencePolicyConfig",
     "CandidateRagValidationConfig",
+    "CausalEndToEndReplayConfig",
     "EMDPolConfig",
     "ExperimentalInputPolicyConfig",
     "EstebanRayConfig",

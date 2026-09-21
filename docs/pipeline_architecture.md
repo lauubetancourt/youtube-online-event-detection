@@ -441,3 +441,12 @@ The following are not current capabilities:
 
 Their absence does not change the causal contract of retrospective or cyclic
 executions. It limits claims about real online operation.
+## Causal end-to-end replay
+
+The opt-in `simulation.causal_end_to_end` route now composes the implemented
+Silver input policy, independent activity/polarization schedulers, neutral
+detection, alert association, candidate projection, causal evidence, and the
+existing G-1/G-2 compatibility path. See
+[`causal_end_to_end_replay.md`](causal_end_to_end_replay.md). This establishes
+technical causal replay readiness; all methodological parameters remain
+experimental and uncalibrated.

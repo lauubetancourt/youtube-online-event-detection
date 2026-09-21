@@ -30,6 +30,7 @@ from youtube_pipeline.rag_generation_g2_hierarchical import RagG2HierarchicalCon
 from youtube_pipeline.rag_sidecars import RagSidecarBuildConfig
 from youtube_pipeline.rag_validation import RagValidationPrepareConfig
 from youtube_pipeline.storage import LocalFilesConfig
+from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
 
 from .models import (
     DataConfig,
@@ -101,6 +102,9 @@ _PATH_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
     CandidateRagValidationConfig: frozenset(
         {"candidates_path", "evidence_dir", "output_dir"}
     ),
+    CausalEndToEndReplayConfig: frozenset(
+        {"output_dir", "stance_artifact_path", "stance_manifest_path"}
+    ),
 }
 
 _OMITTED_NONE_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
@@ -113,7 +117,7 @@ _OMITTED_NONE_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
         {"data", "association", "polarization", "rag", "artifacts"}
     ),
     SignalsConfig: frozenset({"daily", "activity", "polarization"}),
-    SimulationConfig: frozenset({"replay"}),
+    SimulationConfig: frozenset({"replay", "causal_end_to_end"}),
     RagG2HierarchicalConfig: frozenset({"external_evidence_cutoff_utc"}),
 }
 
