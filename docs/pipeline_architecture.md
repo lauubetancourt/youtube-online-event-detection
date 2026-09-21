@@ -190,6 +190,7 @@ Silver → causal_minimal_v1 → StanceCommentInput → CommentStance
 → DetectionAlert when triggered
 → DetectionAssociation after causal timestamp buffering
 → AssociatedEventCandidate after deterministic one-to-one projection
+→ candidate-scoped Silver evidence inventory and RAG-compatible sidecars
 ```
 
 `detection.routes` supplies `signal_id → detector_id`; there is no measure-specific
@@ -199,7 +200,8 @@ the `NumericObservation` boundary rather than being relabeled as
 execution. Observations without values are not dispatched and do not reset state;
 V1 explicitly preserves detector state, while empirical calibration of long-gap
 behavior remains open. Detection, association, and candidate projection remain
-separate runtime boundaries; none retrieves evidence or validates an event.
+separate runtime boundaries. The evidence stage can now retrieve internal corpus
+context, but neither evidence presence nor any preceding boundary validates an event.
 
 Triggered results may now be projected into a neutral `DetectionAlert` carrying an
 explicit `ACTIVITY` or `POLARIZATION` family, deterministic identity, support and
@@ -220,6 +222,12 @@ Both legacy and neutral candidate contracts are implemented and tested. The gene
 production path does not yet use the neutral candidate as the handoff to RAG.
 Existing retrospective and daily event records remain the active compatibility
 contracts.
+
+The new candidate-evidence stage uses `candidate_id` as its canonical join, Silver
+plus `causal_minimal_v1` as its source, and a configurable evidence policy anchored
+at `reference_time_utc`. It writes a separate compatibility view for the unchanged
+non-generative RAG consumer; G-1/G-2 are not run. See
+[candidate evidence policy](event_candidate_evidence_policy.md).
 
 See [activity signal semantics](activity_signal_semantics.md) for the normative A6
 details.
@@ -403,7 +411,9 @@ and do not treat those locations as scientific authorities.
 | XIAO EMA | REFERENCE_COMPATIBILITY | Active reference detector and historical trigger lifecycle |
 | `DetectionResult` | IMPLEMENTED_AND_ACTIVE | Persisted as neutral runtime envelopes; historical XIAO persistence remains separate |
 | Legacy `EventCandidate` | IMPLEMENTED_NOT_YET_CONNECTED | Activity-specific internal contract kept unchanged |
-| `AssociatedEventCandidate` | IMPLEMENTED_NOT_YET_CONNECTED | Neutral finalized-association projection; evidence policy remains downstream |
+| `AssociatedEventCandidate` | IMPLEMENTED_AND_ACTIVE | Neutral finalized-association projection with candidate-scoped evidence handoff |
+| Candidate evidence policy | IMPLEMENTED_AND_ACTIVE | Causal Silver inventory and explicit RAG compatibility adapter |
+| Candidate evidence RAG integration | IMPLEMENTED_OPT_IN | Persisted candidate evidence reaches unchanged G-1 and hierarchical G-2; validation remains experimental |
 | Daily frequency baseline | IMPLEMENTED_AND_ACTIVE | Specialized daily point-candidate path |
 | Retrospective RAG evidence/sidecars | IMPLEMENTED_AND_ACTIVE | Current reference contracts |
 | Daily RAG sidecars/consumer/selection | IMPLEMENTED_AND_ACTIVE | Non-generative daily chain |

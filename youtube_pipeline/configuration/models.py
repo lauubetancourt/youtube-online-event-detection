@@ -26,6 +26,8 @@ from youtube_pipeline.detectors import (
 )
 from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.detection_association import DetectionAssociationConfig
+from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
+from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
@@ -388,6 +390,8 @@ class RagConfig:
     daily_sidecars: DailyRagSidecarBuildConfig | None = None
     daily_consumer: DailyRagConsumerConfig | None = None
     daily_context_selection: DailyContextSelectionConfig | None = None
+    candidate_evidence: CandidateEvidencePolicyConfig | None = None
+    candidate_validation: CandidateRagValidationConfig | None = None
 
     def __post_init__(self) -> None:
         _require_optional_instance("evidence", self.evidence, RagEvidenceBuildConfig)
@@ -416,6 +420,16 @@ class RagConfig:
             self.daily_context_selection,
             DailyContextSelectionConfig,
         )
+        _require_optional_instance(
+            "candidate_evidence",
+            self.candidate_evidence,
+            CandidateEvidencePolicyConfig,
+        )
+        _require_optional_instance(
+            "candidate_validation",
+            self.candidate_validation,
+            CandidateRagValidationConfig,
+        )
         if all(
             config is None
             for config in (
@@ -429,6 +443,8 @@ class RagConfig:
                 self.daily_sidecars,
                 self.daily_consumer,
                 self.daily_context_selection,
+                self.candidate_evidence,
+                self.candidate_validation,
             )
         ):
             raise ValueError("RagConfig must configure at least one RAG stage.")

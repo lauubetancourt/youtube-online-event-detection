@@ -14,6 +14,8 @@ from youtube_pipeline.daily_rag_context_selection import DailyContextSelectionCo
 from youtube_pipeline.daily_rag_consumer import DailyRagConsumerConfig
 from youtube_pipeline.daily_rag_sidecars import DailyRagSidecarBuildConfig
 from youtube_pipeline.data_extraction import ExtractionConfig
+from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
+from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.rag_consumer import RagConsumerConfig
 from youtube_pipeline.rag_evidence import RagEvidenceBuildConfig
@@ -316,6 +318,29 @@ def _resolve_daily_context_selection(
     )
 
 
+def _resolve_candidate_evidence(
+    config: CandidateEvidencePolicyConfig,
+    base_dir: Path,
+) -> CandidateEvidencePolicyConfig:
+    return replace(
+        config,
+        source_path=str(_resolve_path(config.source_path, base_dir)),
+        output_dir=str(_resolve_path(config.output_dir, base_dir)),
+    )
+
+
+def _resolve_candidate_validation(
+    config: CandidateRagValidationConfig,
+    base_dir: Path,
+) -> CandidateRagValidationConfig:
+    return replace(
+        config,
+        candidates_path=str(_resolve_path(config.candidates_path, base_dir)),
+        evidence_dir=str(_resolve_path(config.evidence_dir, base_dir)),
+        output_dir=str(_resolve_path(config.output_dir, base_dir)),
+    )
+
+
 def resolve_run_config_paths(
     config: RunConfig,
     *,
@@ -468,6 +493,16 @@ def resolve_run_config_paths(
                     base,
                 )
                 if rag.daily_context_selection is not None
+                else None
+            ),
+            candidate_evidence=(
+                _resolve_candidate_evidence(rag.candidate_evidence, base)
+                if rag.candidate_evidence is not None
+                else None
+            ),
+            candidate_validation=(
+                _resolve_candidate_validation(rag.candidate_validation, base)
+                if rag.candidate_validation is not None
                 else None
             ),
         )

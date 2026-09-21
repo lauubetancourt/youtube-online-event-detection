@@ -98,11 +98,11 @@ explicit `false` flags for evidence retrieval and RAG execution.
 ## Existing sidecars
 
 The current retrospective RAG sidecars use `event_id`, trigger/evidence-window
-bounds, comment inventories, and event-to-video maps. They are activity-specific and
-are intentionally unchanged. A future evidence-policy adapter can use
-`candidate_id` as its join identity, derive a separate evidence interval, and build
-comment/video/thread inventories from the canonical Silver universe. This requires
-an adapter, not a change to the neutral candidate or to existing sidecars.
+bounds, comment inventories, and event-to-video maps. They remain unchanged. The
+implemented [candidate evidence policy](event_candidate_evidence_policy.md) now uses
+`candidate_id`, derives a separate causal evidence interval, and builds inventories
+from the canonical Silver universe. A separate compatibility view supplies the
+legacy `event_id` alias required by the unchanged non-generative RAG consumer.
 
 Changing detector parameters, signal windows/cadences, gap policy, or association
 tolerance can change associations and candidate types between runs. That is an

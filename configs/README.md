@@ -188,7 +188,33 @@ opt-in stage. A development-only example is:
 ```
 
 The tolerance is an experimental parameter and is not derived from signal windows or
-cadences. The stage writes neutral associations and does not create event candidates.
+cadences. Candidate projection consumes finalized associations without applying the
+tolerance again.
+
+Candidate evidence is a separate opt-in RAG configuration. Temporal values shown
+here are illustrative only and must be labelled explicitly:
+
+```json
+{
+  "rag": {
+    "candidate_evidence": {
+      "source_path": "data/silver/comments.parquet",
+      "output_dir": "outputs/candidate_evidence",
+      "policy_id": "candidate_evidence_v1",
+      "time_anchor": "reference_time_utc",
+      "lookback": "10min",
+      "lookahead": "0s",
+      "mode": "immediate_causal",
+      "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
+    }
+  }
+}
+```
+
+The source is fixed to Silver plus `causal_minimal_v1`; semantic filtering remains
+disabled. Changing lookback, lookahead, mode, or parameter status changes resolved
+configuration and `config_hash`. No duration in this example is recommended or
+calibrated.
 
 The development profile
 `configs/development/polarization_detection_runtime_smoke.json` reads Silver through
@@ -384,3 +410,27 @@ replacement working
 + no required consumers
 + documentation updated
 ```
+
+## Candidate evidence RAG integration
+
+The causal candidate route is opt-in. Network-capable execution additionally
+requires the CLI `--execute` guard:
+
+```json
+{
+  "identity": {"run_id": "candidate-rag-development"},
+  "rag": {
+    "candidate_validation": {
+      "candidates_path": "outputs/event_candidates.jsonl",
+      "evidence_dir": "outputs/candidate_evidence",
+      "output_dir": "outputs/candidate_rag_validation",
+      "candidate_id": "candidate_example"
+    }
+  }
+}
+```
+
+The adapter reuses the fixed G-1 and hierarchical G-2 model/prompt contracts.
+Search-day and capacity parameters keep their existing experimental semantics;
+this integration does not calibrate them. Candidate G-2 adds an explicit
+publication-time cutoff while legacy G-2 behavior remains unchanged.

@@ -26,6 +26,8 @@ from youtube_pipeline.data_extraction import ExtractionConfig
 from youtube_pipeline.detectors import ADWINConfig, KSWINConfig, PageHinkleyConfig, XiaoEMAConfig
 from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.detection_association import DetectionAssociationConfig
+from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
+from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_measures import (
@@ -94,6 +96,8 @@ _RAG_FIELDS = {
     "daily_sidecars",
     "daily_consumer",
     "daily_context_selection",
+    "candidate_evidence",
+    "candidate_validation",
 }
 
 
@@ -520,6 +524,14 @@ def _build_rag(payload: Any) -> RagConfig:
         daily_context_selection=build_component(
             "daily_context_selection",
             DailyContextSelectionConfig,
+        ),
+        candidate_evidence=build_component(
+            "candidate_evidence",
+            CandidateEvidencePolicyConfig,
+        ),
+        candidate_validation=build_component(
+            "candidate_validation",
+            CandidateRagValidationConfig,
         ),
     )
 

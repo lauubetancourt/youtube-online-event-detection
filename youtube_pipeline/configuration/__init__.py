@@ -11,6 +11,8 @@ from youtube_pipeline.detection_association import (
     DetectionAssociation,
     DetectionAssociationConfig,
 )
+from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
+from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.stance_classifier import (
     CommentStanceClassifierConfig, ClassifierRetryPolicy, StanceProposition,
@@ -57,6 +59,8 @@ __all__ = [
     "DetectionGapPolicyConfig",
     "DetectionAssociation",
     "DetectionAssociationConfig",
+    "CandidateEvidencePolicyConfig",
+    "CandidateRagValidationConfig",
     "EMDPolConfig",
     "ExperimentalInputPolicyConfig",
     "EstebanRayConfig",

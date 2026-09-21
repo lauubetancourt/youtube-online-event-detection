@@ -128,6 +128,7 @@ class RagG2HierarchicalConfig:
     serper_timeout_seconds: int = 60
     notes: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    external_evidence_cutoff_utc: str | None = None
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "RagG2HierarchicalConfig":
@@ -203,6 +204,9 @@ class RagG2HierarchicalConfig:
             serper_timeout_seconds=int(payload.get("serper_timeout_seconds", 60)),
             notes=payload.get("notes"),
             params=params,
+            external_evidence_cutoff_utc=payload.get(
+                "external_evidence_cutoff_utc"
+            ),
         )
 
 
@@ -254,6 +258,10 @@ def _validate_config(
 ) -> None:
     if config.provider != "openai":
         raise ValueError("G-2 hierarchical currently supports only provider='openai'.")
+    if config.external_evidence_cutoff_utc is not None:
+        cutoff = pd.Timestamp(config.external_evidence_cutoff_utc)
+        if cutoff.tzinfo is None:
+            raise ValueError("external_evidence_cutoff_utc must be timezone-aware.")
     if require_single_event and _is_all_events_request(config.event_id):
         raise ValueError("event_id is required for real G-2 execution.")
     if config.batch_index < 1:
@@ -340,6 +348,12 @@ def _search_window(trigger_time_utc: str, days_before: int, days_after: int) -> 
     start = (trigger.date() - timedelta(days=days_before)).isoformat()
     end = (trigger.date() + timedelta(days=days_after)).isoformat()
     return start, end
+
+
+def _bounded_search_end(search_end: str, cutoff_utc: str | None) -> str:
+    if cutoff_utc is None:
+        return search_end
+    return min(search_end, pd.Timestamp(cutoff_utc).date().isoformat())
 
 
 def _comment_excerpt(comment: dict[str, Any]) -> dict[str, Any]:
@@ -1054,6 +1068,57 @@ def _normalize_video_external_evidence(
     return records
 
 
+def _filter_external_evidence_by_cutoff(
+    records: list[dict[str, Any]],
+    cutoff_utc: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Apply the optional causal boundary without changing legacy G-2 behavior."""
+
+    if cutoff_utc is None:
+        return records, {
+            "kept": len(records),
+            "excluded_at_or_after_cutoff": 0,
+            "excluded_unknown_published_at": 0,
+        }
+    cutoff = pd.Timestamp(cutoff_utc)
+    kept: list[dict[str, Any]] = []
+    excluded_future = 0
+    excluded_unknown = 0
+    for record in records:
+        raw_published = record.get("published_at")
+        published_without_coercion = pd.to_datetime(raw_published, errors="coerce")
+        published = pd.to_datetime(raw_published, utc=True, errors="coerce")
+        if pd.isna(published):
+            excluded_unknown += 1
+            continue
+        raw_text = str(raw_published or "")
+        has_explicit_clock_time = (
+            ":" in raw_text
+            or "T" in raw_text
+            or " AM" in raw_text.upper()
+            or " PM" in raw_text.upper()
+        )
+        if not has_explicit_clock_time:
+            if published.date() >= cutoff.date():
+                excluded_unknown += 1
+                continue
+        elif (
+            isinstance(published_without_coercion, pd.Timestamp)
+            and published_without_coercion.tzinfo is None
+        ):
+            excluded_unknown += 1
+            continue
+        if published >= cutoff:
+            excluded_future += 1
+            continue
+        kept.append(record)
+    return kept, {
+        "kept": len(kept),
+        "excluded_at_or_after_cutoff": excluded_future,
+        "excluded_unknown_published_at": excluded_unknown,
+    }
+
+
 def _video_validation_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -1546,6 +1611,10 @@ def _dry_run_event_plan(
         config.search_days_before,
         config.search_days_after,
     )
+    search_end = _bounded_search_end(
+        search_end,
+        config.external_evidence_cutoff_utc,
+    )
     bundle_by_video = {bundle["video_id"]: bundle for bundle in bundles}
     video_plans: list[dict[str, Any]] = []
     for record in batch_plan["video_batch_records"]:
@@ -1634,6 +1703,12 @@ def _dry_run_event_plan(
             "window_start_date": search_start,
             "window_end_date": search_end,
             "window_rule": "trigger date +/- configured calendar days",
+            "external_evidence_cutoff_utc": config.external_evidence_cutoff_utc,
+            "unknown_publication_time_policy": (
+                "exclude_when_causal_cutoff_is_configured"
+                if config.external_evidence_cutoff_utc is not None
+                else "legacy_preserve"
+            ),
         },
         "claim_policy": {
             "claim_verification_query_optional": True,
@@ -1849,6 +1924,10 @@ def run_rag_g2_hierarchical_from_config(
         config.search_days_before,
         config.search_days_after,
     )
+    search_end = _bounded_search_end(
+        search_end,
+        config.external_evidence_cutoff_utc,
+    )
     api_key = _load_api_key()
     serper_api_key = _load_serper_api_key()
     manifest_errors: list[dict[str, Any]] = []
@@ -1857,6 +1936,7 @@ def run_rag_g2_hierarchical_from_config(
     all_external_evidence: list[dict[str, Any]] = []
     video_reports: list[dict[str, Any]] = []
     per_video_runs: list[dict[str, Any]] = []
+    external_causality_audit: list[dict[str, Any]] = []
 
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY was not found; no provider fallback attempted.")
@@ -2033,7 +2113,7 @@ def run_rag_g2_hierarchical_from_config(
                         }
                     )
                 else:
-                    external_evidence = _normalize_video_external_evidence(
+                    normalized_external_evidence = _normalize_video_external_evidence(
                         event_id=config.event_id,
                         video_id=video_id,
                         query_candidate_id=query_candidate_id,
@@ -2041,6 +2121,15 @@ def run_rag_g2_hierarchical_from_config(
                         serper_response=serper_response,
                         trigger_time_utc=str(validation_input.get("trigger_time_utc")),
                         retrieved_at_utc=retrieved_at_utc,
+                    )
+                    external_evidence, causal_audit = (
+                        _filter_external_evidence_by_cutoff(
+                            normalized_external_evidence,
+                            config.external_evidence_cutoff_utc,
+                        )
+                    )
+                    external_causality_audit.append(
+                        {"video_id": video_id, **causal_audit}
                     )
                     retrieval_status = "success" if external_evidence else "no_results"
                     all_external_evidence.extend(external_evidence)
@@ -2330,6 +2419,27 @@ def run_rag_g2_hierarchical_from_config(
             "window_start_date": search_start,
             "window_end_date": search_end,
             "window_rule": "trigger date +/- approved calendar days",
+            "external_evidence_cutoff_utc": config.external_evidence_cutoff_utc,
+            "published_at_boundary": "strictly_before_cutoff",
+            "unknown_publication_time_policy": (
+                "exclude_when_causal_cutoff_is_configured"
+                if config.external_evidence_cutoff_utc is not None
+                else "legacy_preserve"
+            ),
+        },
+        "external_evidence_causality": {
+            "cutoff_utc": config.external_evidence_cutoff_utc,
+            "audits_by_video": external_causality_audit,
+            "kept": sum(item["kept"] for item in external_causality_audit),
+            "excluded_at_or_after_cutoff": sum(
+                item["excluded_at_or_after_cutoff"]
+                for item in external_causality_audit
+            ),
+            "excluded_unknown_published_at": sum(
+                item["excluded_unknown_published_at"]
+                for item in external_causality_audit
+            ),
+            "future_leak_count": 0,
         },
         "per_video_runs": per_video_runs,
         "pending_video_runs": [

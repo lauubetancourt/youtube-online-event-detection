@@ -19,6 +19,8 @@ from youtube_pipeline.daily_rag_context_selection import DailyContextSelectionCo
 from youtube_pipeline.daily_rag_consumer import DailyRagConsumerConfig
 from youtube_pipeline.daily_rag_sidecars import DailyRagSidecarBuildConfig
 from youtube_pipeline.data_extraction import ExtractionConfig
+from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
+from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.rag_consumer import RagConsumerConfig
 from youtube_pipeline.rag_evidence import RagEvidenceBuildConfig
@@ -95,6 +97,10 @@ _PATH_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
     RagG1Config: frozenset({"consumer_dir", "output_dir"}),
     RagG2Config: frozenset({"consumer_dir", "g1_dir", "output_dir"}),
     RagG2HierarchicalConfig: frozenset({"consumer_dir", "output_dir"}),
+    CandidateEvidencePolicyConfig: frozenset({"source_path", "output_dir"}),
+    CandidateRagValidationConfig: frozenset(
+        {"candidates_path", "evidence_dir", "output_dir"}
+    ),
 }
 
 _OMITTED_NONE_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
@@ -108,6 +114,7 @@ _OMITTED_NONE_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
     ),
     SignalsConfig: frozenset({"daily", "activity", "polarization"}),
     SimulationConfig: frozenset({"replay"}),
+    RagG2HierarchicalConfig: frozenset({"external_evidence_cutoff_utc"}),
 }
 
 
