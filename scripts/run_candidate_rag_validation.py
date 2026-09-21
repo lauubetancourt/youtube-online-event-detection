@@ -56,6 +56,7 @@ def main() -> int:
     artifacts = run_candidate_rag_validation(
         resolved.config.rag.candidate_validation,
         execute=True,
+        g2_gate=resolved.config.rag.g2_gate,
     )
     print(
         json.dumps(

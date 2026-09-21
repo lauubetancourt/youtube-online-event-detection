@@ -338,6 +338,9 @@ class ClassifiedCommentRecord:
     attempts: int
     classification_time_utc: datetime
     input_hash: str
+    token_usage: TokenUsage | None
+    usage_reported_attempts: int
+    usage_unreported_attempts: int
     error_reason: str | None = None
     model_response_id: str | None = None
 
@@ -348,6 +351,29 @@ class ClassifiedCommentRecord:
             "classification_time_utc": self.classification_time_utc.isoformat(),
             "input_hash": self.input_hash, "error_reason": self.error_reason,
             "model_response_id": self.model_response_id,
+            "comment_kind": (
+                "reply" if self.parent_comment_id is not None else "root"
+            ),
+            "token_usage": (
+                {
+                    "input_tokens": self.token_usage.input_tokens,
+                    "output_tokens": self.token_usage.output_tokens,
+                    "total_tokens": self.token_usage.total_tokens,
+                }
+                if self.token_usage is not None
+                else None
+            ),
+            "token_usage_status": (
+                "NOT_APPLICABLE"
+                if self.attempts == 0
+                else "REPORTED"
+                if self.usage_unreported_attempts == 0
+                else "UNKNOWN"
+                if self.usage_reported_attempts == 0
+                else "PARTIAL"
+            ),
+            "usage_reported_attempts": self.usage_reported_attempts,
+            "usage_unreported_attempts": self.usage_unreported_attempts,
         }
 
 
@@ -419,6 +445,8 @@ class OpenAICommentStanceClassifier:
         if comment.author_id is None:
             reasons.add("missing_author")
         attempts, response_id, error = 0, None, None
+        usage_calls = 0
+        local_tokens = [0, 0, 0]
         status, category = SKIPPED, None
         parent = comment.parent_text
         if comment.is_deleted:
@@ -456,8 +484,10 @@ class OpenAICommentStanceClassifier:
                             if not isinstance(response.usage, TokenUsage):
                                 raise InvalidStanceOutput("invalid_transport_usage")
                             self._usage_calls += 1
+                            usage_calls += 1
                             for i, value in enumerate((response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens)):
                                 self._tokens[i] += value
+                                local_tokens[i] += value
                         response_id = response.response_id
                         if response.refusal or response.finish_reason == "content_filter":
                             reasons.add("model_refusal")
@@ -492,7 +522,16 @@ class OpenAICommentStanceClassifier:
         timestamp = datetime.now(timezone.utc)
         self._records[comment.comment_id] = ClassifiedCommentRecord(
             result, comment.parent_comment_id, tuple(sorted(reasons)), attempts,
-            timestamp, input_hash, error, response_id,
+            timestamp, input_hash,
+            (
+                TokenUsage(*local_tokens)
+                if usage_calls > 0
+                else None
+            ),
+            usage_calls,
+            attempts - usage_calls,
+            error,
+            response_id,
         )
         return result
 

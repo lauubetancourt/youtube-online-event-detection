@@ -84,6 +84,16 @@ async def run_configured_comment_stance_classification(
                     "reference_notebook_sha256": REFERENCE_NOTEBOOK_SHA256,
                     "proposition": to_json_mapping(proposition),
                     "context_hash": hashlib.sha256(proposition.context.encode("utf-8")).hexdigest(),
+                    "topic_profile": (
+                        to_json_mapping(resolved.config.topic_profile)
+                        if resolved.config.topic_profile is not None
+                        else None
+                    ),
+                    "topic_id": (
+                        resolved.config.topic_profile.topic_id
+                        if resolved.config.topic_profile is not None
+                        else None
+                    ),
                     "max_concurrency": settings.max_concurrency,
                     "retry_policy": to_json_mapping(settings.retry_policy),
                     "inference_parameters": {
@@ -91,6 +101,12 @@ async def run_configured_comment_stance_classification(
                         "max_completion_tokens": settings.max_completion_tokens,
                         "request_timeout_seconds": settings.request_timeout_seconds,
                         "max_input_characters": settings.max_input_characters,
+                    },
+                    "classification_policy": {
+                        "policy_id": "comment_stance_likert5_structured_v1",
+                        "missing_parent_policy": "SKIPPED",
+                        "thread_context": "immediate_parent_only",
+                        "text_authority": "original",
                     },
                     "missing_parent_policy": "SKIPPED", "thread_context": "immediate_parent_only",
                     "token_usage": classifier.token_accounting,

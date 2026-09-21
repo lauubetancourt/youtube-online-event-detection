@@ -24,11 +24,21 @@ from youtube_pipeline.candidate_evidence import (
     build_candidate_evidence,
 )
 from youtube_pipeline.candidate_rag import (
+    CANDIDATE_G2_EXTERNAL_EVIDENCE_FILE,
+    CANDIDATE_G2_GATE_DECISION_FILE,
     CANDIDATE_RAG_MANIFEST_FILE,
     CANDIDATE_VALIDATION_RESULTS_FILE,
     VALIDATED,
     CandidateRagValidationConfig,
     run_candidate_rag_validation,
+)
+from youtube_pipeline.g2_gate import (
+    G2_EXECUTED,
+    G2_FAILED,
+    G2_NOT_ELIGIBLE,
+    G2_SKIPPED_BY_G1_GATE,
+    PERMISSIVE,
+    G2GatePolicyConfig,
 )
 from youtube_pipeline.configuration import (
     resolve_run_config,
@@ -361,10 +371,82 @@ class CandidateRagTests(unittest.TestCase):
             self.assertEqual(result["selected_fraction"], 1.0)
             self.assertEqual(result["internal_future_leak_count"], 0)
             self.assertEqual(result["external_future_leak_count"], 0)
+            self.assertEqual(result["g2_execution_status"], G2_EXECUTED)
+            self.assertEqual(
+                result["g2_gate_decision"]["reason_code"], "GATE_OFF_BASELINE"
+            )
             manifest = json.loads(artifacts.manifest_path.read_text())
             self.assertEqual(manifest["causality"]["future_leak_count"], 0)
             self.assertEqual(manifest["token_usage"]["total_tokens"], 45)
             self.assertEqual(manifest["counts"]["g2_video_results"], 2)
+            self.assertEqual(manifest["g2"]["execution_status"], G2_EXECUTED)
+            self.assertEqual(
+                manifest["evidence"]["context_coverage"]["selected_comments"], 2
+            )
+            external = _read_jsonl(
+                artifacts.output_dir / CANDIDATE_G2_EXTERNAL_EVIDENCE_FILE
+            )[0]
+            self.assertEqual(external["candidate_reference_time_utc"], REFERENCE.isoformat())
+            self.assertEqual(
+                external["external_temporal_relation"], "PRE_CANDIDATE"
+            )
+            gate = json.loads(
+                (artifacts.output_dir / CANDIDATE_G2_GATE_DECISION_FILE).read_text()
+            )
+            self.assertEqual(gate["decision"], "RUN_G2")
+
+    def test_configured_gate_can_skip_g2_without_marking_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = _candidate("ACTIVITY", candidate_id="gated")
+            config = self._prepare(root, candidate)
+            mocked = _MockRag(self)
+            artifacts = run_candidate_rag_validation(
+                config,
+                execute=True,
+                g2_gate=G2GatePolicyConfig(
+                    mode=PERMISSIVE,
+                    run_g2_for_g1_statuses=("partially_confirmed",),
+                    parameter_status="TEST_ONLY",
+                ),
+                g1_runner=mocked.g1,
+                g2_runner=mocked.g2,
+            )
+            self.assertEqual(mocked.g1_calls, 1)
+            self.assertEqual(mocked.g2_calls, 0)
+            result = _read_jsonl(artifacts.validation_results_path)[0]
+            self.assertEqual(result["status"], VALIDATED)
+            self.assertEqual(
+                result["g2_execution_status"], G2_SKIPPED_BY_G1_GATE
+            )
+            self.assertIsNotNone(result["g1_result"])
+            self.assertIsNone(result["g2_result"])
+            self.assertEqual(
+                result["final_synthesis"]["validation_status"], "confirmed"
+            )
+
+    def test_g2_failure_is_distinct_from_gate_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = _candidate("ACTIVITY", candidate_id="g2-failure")
+            config = self._prepare(root, candidate)
+            mocked = _MockRag(self)
+
+            def fail_g2(_config):
+                mocked.g2_calls += 1
+                raise RuntimeError("test-only failure")
+
+            artifacts = run_candidate_rag_validation(
+                config,
+                execute=True,
+                g1_runner=mocked.g1,
+                g2_runner=fail_g2,
+            )
+            result = _read_jsonl(artifacts.validation_results_path)[0]
+            self.assertEqual(result["status"], "VALIDATION_ERROR")
+            self.assertEqual(result["g2_execution_status"], G2_FAILED)
+            self.assertIsNotNone(result["g1_result"])
+            self.assertIsNone(result["g2_result"])
 
     def test_all_candidate_types_use_same_pipeline(self) -> None:
         for candidate_type in ("ACTIVITY", "POLARIZATION", "ACTIVITY_POLARIZATION"):
@@ -430,6 +512,7 @@ class CandidateRagTests(unittest.TestCase):
                 result = _read_jsonl(artifacts.validation_results_path)[0]
                 self.assertIsNone(result["g1_result"])
                 self.assertIsNone(result["g2_result"])
+                self.assertEqual(result["g2_execution_status"], G2_NOT_ELIGIBLE)
 
     def test_explicit_execute_guard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

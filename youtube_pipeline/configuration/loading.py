@@ -28,6 +28,7 @@ from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.detection_association import DetectionAssociationConfig
 from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
 from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
+from youtube_pipeline.g2_gate import G2GatePolicyConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_measures import (
@@ -44,6 +45,7 @@ from youtube_pipeline.rag_sidecars import RagSidecarBuildConfig
 from youtube_pipeline.rag_validation import RagValidationPrepareConfig
 from youtube_pipeline.storage import LocalFilesConfig
 from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
+from youtube_pipeline.topic_profiles import TopicProfile, load_topic_profile
 
 from .models import (
     ArtifactsConfig,
@@ -67,6 +69,7 @@ _ROOT_FIELDS = {
     "polarization",
     "rag",
     "artifacts",
+    "topic_profile",
 }
 _DATA_FIELDS = {
     "youtube_api", "local_files", "prepared_dataset", "cleaning",
@@ -102,6 +105,7 @@ _RAG_FIELDS = {
     "daily_context_selection",
     "candidate_evidence",
     "candidate_validation",
+    "g2_gate",
 }
 
 
@@ -546,7 +550,59 @@ def _build_rag(payload: Any) -> RagConfig:
             "candidate_validation",
             CandidateRagValidationConfig,
         ),
+        g2_gate=(
+            G2GatePolicyConfig.from_mapping(
+                _require_object(section["g2_gate"], "rag.g2_gate")
+            )
+            if "g2_gate" in section
+            else None
+        ),
     )
+
+
+def _compose_topic_profile(root: dict[str, Any]) -> dict[str, Any]:
+    """Resolve topic authority into the classifier portion of RunConfig."""
+
+    if "topic_profile" not in root:
+        return root
+    raw_profile = root["topic_profile"]
+    if isinstance(raw_profile, str):
+        raise ValueError(
+            "String topic_profile references require load_run_config()."
+        )
+    profile = TopicProfile.from_mapping(
+        _require_object(raw_profile, "topic_profile")
+    )
+    composed = dict(root)
+    composed["topic_profile"] = profile.to_mapping()
+    polarization = dict(
+        _require_object(composed.get("polarization", {}), "polarization")
+    )
+    if "classifier" in polarization:
+        classifier = dict(
+            _require_object(
+                polarization["classifier"], "polarization.classifier"
+            )
+        )
+        expected = {
+            "proposition": {
+                "proposition_id": profile.proposition.proposition_id,
+                "proposition_text": profile.proposition.proposition_text,
+                "context": profile.proposition.context,
+                "context_version": profile.proposition.context_version,
+            },
+            "prompt_id": profile.stance_prompt_id,
+            "prompt_version": profile.stance_prompt_version,
+        }
+        for name, value in expected.items():
+            if name in classifier and classifier[name] != value:
+                raise ValueError(
+                    f"polarization.classifier.{name} conflicts with topic_profile."
+                )
+            classifier[name] = value
+        polarization["classifier"] = classifier
+        composed["polarization"] = polarization
+    return composed
 
 
 def run_config_from_mapping(
@@ -560,6 +616,7 @@ def run_config_from_mapping(
     if overrides is not None:
         override_payload = _require_object(overrides, "overrides")
         root = _merge_explicit_overrides(root, override_payload)
+    root = _compose_topic_profile(root)
     _reject_unknown_keys(root, _ROOT_FIELDS, "RunConfig")
     if "identity" not in root:
         raise ValueError("identity is required.")
@@ -603,6 +660,11 @@ def run_config_from_mapping(
             if "artifacts" in root
             else None
         ),
+        topic_profile=(
+            TopicProfile.from_mapping(root["topic_profile"])
+            if "topic_profile" in root
+            else None
+        ),
     )
 
 
@@ -625,7 +687,36 @@ def load_run_config(
             f"Invalid JSON in run config {path} at line {exc.lineno}, "
             f"column {exc.colno}."
         ) from exc
-    return run_config_from_mapping(payload, overrides=overrides)
+    if not isinstance(payload, Mapping):
+        raise TypeError("RunConfig must be a JSON object.")
+    resolved_payload = dict(payload)
+    topic_reference = resolved_payload.get("topic_profile")
+    if isinstance(topic_reference, str):
+        supplied = Path(topic_reference)
+        candidates: list[Path] = []
+        if supplied.suffix:
+            candidates.append(path.parent / supplied)
+        else:
+            candidates.extend(
+                (
+                    path.parent / f"{topic_reference}.json",
+                    path.parent / "topics" / f"{topic_reference}.json",
+                    path.parent.parent / "topics" / f"{topic_reference}.json",
+                )
+            )
+        topic_path = next((item for item in candidates if item.is_file()), None)
+        if topic_path is None:
+            rendered = ", ".join(str(item) for item in candidates)
+            raise FileNotFoundError(
+                f"Unknown topic profile {topic_reference!r}; checked: {rendered}"
+            )
+        profile = load_topic_profile(topic_path)
+        if profile.topic_id != topic_reference and not supplied.suffix:
+            raise ValueError(
+                "Topic profile ID does not match the experiment reference."
+            )
+        resolved_payload["topic_profile"] = profile.to_mapping()
+    return run_config_from_mapping(resolved_payload, overrides=overrides)
 
 
 __all__ = ["load_run_config", "run_config_from_mapping"]

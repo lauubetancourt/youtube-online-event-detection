@@ -316,6 +316,11 @@ class ClassifierBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(classifier.token_accounting, {"input_tokens": 30, "output_tokens": 8, "total_tokens": 38,
                                                      "reported_attempts": 2, "unreported_attempts": 1,
                                                      "usage_complete": False, "provider_attempts": 3})
+        rows = [record.to_mapping() for record in classifier.records]
+        self.assertEqual(rows[0]["token_usage"]["total_tokens"], 15)
+        self.assertEqual(rows[0]["token_usage_status"], "REPORTED")
+        self.assertEqual(rows[2]["token_usage_status"], "UNKNOWN")
+        self.assertIsNone(rows[2]["token_usage"])
 
     async def test_bounded_concurrency_and_deterministic_result_order(self):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -463,6 +468,8 @@ class ClassifierPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(row["proposition_id"], "p")
                 self.assertIn("quality_reasons", row)
                 self.assertIn("parent_comment_id", row)
+                self.assertIn(row["comment_kind"], {"root", "reply"})
+                self.assertIn("token_usage_status", row)
                 self.assertNotIn("confidence", row)
                 self.assertNotIn("sentiment", row)
                 self.assertNotIn("text", row)
@@ -475,6 +482,10 @@ class ClassifierPersistenceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["token_usage"]["total_tokens"], 27)
             self.assertEqual(manifest["counts_by_status"], {CLASSIFIED: 1, NOT_APPLICABLE: 1, SKIPPED: 1})
             self.assertEqual(manifest["proposition"]["proposition_text"], PROPOSITION.proposition_text)
+            self.assertEqual(
+                manifest["classification_policy"]["policy_id"],
+                "comment_stance_likert5_structured_v1",
+            )
             self.assertIn("system_instructions", manifest["prompt_artifact"])
             self.assertIsNone(manifest["monetary_cost"])
             self.assertTrue(output.resolved_config_path.exists())

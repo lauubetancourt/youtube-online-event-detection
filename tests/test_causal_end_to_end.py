@@ -47,6 +47,7 @@ from youtube_pipeline.detectors import KSWINConfig, PageHinkleyConfig
 from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.detection_association import DetectionAssociationConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
+from youtube_pipeline.g2_gate import G2GatePolicyConfig
 from youtube_pipeline.polarization_measures import MECConfig
 from youtube_pipeline.polarization_runtime_config import (
     CAUSAL_MINIMAL_V1_INPUT,
@@ -72,6 +73,7 @@ from youtube_pipeline.stance_classifier import (
     StanceProposition,
 )
 from youtube_pipeline.storage import LocalFilesConfig
+from youtube_pipeline.topic_profiles import TopicProfile
 
 
 UTC = timezone.utc
@@ -215,13 +217,33 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
             "quality": "passed",
         })
     _write_jsonl(stances, stance_rows)
+    proposition = StanceProposition(
+        proposition_id="prop-a",
+        proposition_text="La propuesta debe aprobarse.",
+        context="Caso sintético controlado.",
+    )
     _write_json(stance_manifest, {
         "artifact_version": "stance_classifier_v1",
         "classifier_run_id": run_id,
         "model": "gpt-4.1-2025-04-14",
         "prompt_id": "comment_stance_likert5",
         "prompt_version": "1",
-        "proposition": {"proposition_id": "prop-a"},
+        "topic_id": "synthetic-topic",
+        "proposition": {
+            "proposition_id": proposition.proposition_id,
+            "proposition_text": proposition.proposition_text,
+            "context": proposition.context,
+            "context_version": proposition.context_version,
+        },
+        "context_hash": hashlib.sha256(
+            proposition.context.encode("utf-8")
+        ).hexdigest(),
+        "classification_policy": {
+            "policy_id": "comment_stance_likert5_structured_v1",
+            "missing_parent_policy": "SKIPPED",
+            "thread_context": "immediate_parent_only",
+            "text_authority": "original",
+        },
         "input_ref": str(comments.absolute()),
         "input_policy_id": "causal_minimal_v1",
         "input_source_sha256": hashlib.sha256(
@@ -274,11 +296,7 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
         polarization=PolarizationConfig(
             mec=MECConfig(alpha=2.0, beta=1.15),
             classifier=CommentStanceClassifierConfig(
-                proposition=StanceProposition(
-                    proposition_id="prop-a",
-                    proposition_text="La propuesta debe aprobarse.",
-                    context="Caso sintético controlado.",
-                )
+                proposition=proposition
             ),
             runtime=PolarizationRuntimeConfig(
                 video_ids=("video-a",),
@@ -297,11 +315,36 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
                 evidence_dir=str(root / "unused-evidence"),
                 output_dir=str(root / "unused-rag"), candidate_id="runtime-placeholder",
             ),
+            g2_gate=G2GatePolicyConfig(),
+        ),
+        topic_profile=TopicProfile(
+            topic_id="synthetic-topic",
+            topic_description="Tema sintético para replay causal.",
+            proposition=proposition,
         ),
     )
 
 
 class CausalEndToEndTests(unittest.TestCase):
+    def test_stance_reuse_rejects_changed_proposition_or_context(self) -> None:
+        for field, value in (
+            ("proposition_text", "Una proposición diferente."),
+            ("context", "Un contexto diferente."),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                config = _fixture(root, run_id=f"reuse-{field}", output_name="out")
+                manifest_path = root / "classifier_manifest.json"
+                manifest = json.loads(manifest_path.read_text())
+                manifest["proposition"][field] = value
+                if field == "context":
+                    manifest["context_hash"] = hashlib.sha256(
+                        value.encode("utf-8")
+                    ).hexdigest()
+                _write_json(manifest_path, manifest)
+                with self.assertRaisesRegex(ValueError, "snapshot"):
+                    run_causal_end_to_end_replay(config, base_dir=root)
+
     def test_activity_scheduler_catches_up_all_ticks(self) -> None:
         definition = event_window_comment_count_definition(
             window="2min", cadence="1min", time_basis="event_time_utc"
@@ -375,6 +418,9 @@ class CausalEndToEndTests(unittest.TestCase):
         self.assertEqual(manifest["causality"]["future_leak_count"], 0)
         self.assertEqual(manifest["scheduling"]["activity_ticks"], 11)
         self.assertEqual(manifest["scheduling"]["polarization_ticks"], 5)
+        self.assertEqual(manifest["stance"]["topic_id"], "synthetic-topic")
+        self.assertEqual(manifest["rag"]["g2_gate"]["mode"], "OFF")
+        self.assertEqual(manifest["counts"]["g2_skipped_by_gate"], 0)
         self.assertEqual(artifacts.validations, 1)
         self.assertNotIn("future", rag.context_comment_ids)
         self.assertEqual(rag.g1_calls, 1)

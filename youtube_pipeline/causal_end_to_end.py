@@ -41,6 +41,7 @@ from youtube_pipeline.configuration.models import RunConfig
 from youtube_pipeline.configuration.paths import resolve_run_config
 from youtube_pipeline.configuration.serialization import run_config_to_mapping
 from youtube_pipeline.detectors import create_detector
+from youtube_pipeline.g2_gate import G2GatePolicyConfig
 from youtube_pipeline.detection_alerts import (
     ACTIVITY,
     POLARIZATION,
@@ -178,6 +179,7 @@ def _validate_stance_reuse(
     assert config.polarization is not None
     assert config.polarization.classifier is not None
     classifier = config.polarization.classifier
+    assert config.topic_profile is not None
     expected = {
         "classifier_run_id": config.identity.run_id,
         "model": classifier.model,
@@ -187,14 +189,33 @@ def _validate_stance_reuse(
     for name, value in expected.items():
         if manifest.get(name) != value:
             raise ValueError(f"Stance manifest {name} is incompatible with the replay.")
+    if manifest.get("topic_id") != config.topic_profile.topic_id:
+        raise ValueError("Stance manifest topic_id is incompatible with the replay.")
     proposition = manifest.get("proposition")
     proposition_id = (
         proposition.get("proposition_id")
         if isinstance(proposition, Mapping)
         else manifest.get("proposition_id")
     )
+    expected_proposition = to_json_mapping(classifier.proposition)
     if proposition_id != classifier.proposition.proposition_id:
         raise ValueError("Stance manifest proposition is incompatible with the replay.")
+    if proposition != expected_proposition:
+        raise ValueError(
+            "Stance manifest proposition/context snapshot is incompatible with the replay."
+        )
+    context_hash = hashlib.sha256(
+        classifier.proposition.context.encode("utf-8")
+    ).hexdigest()
+    if manifest.get("context_hash") != context_hash:
+        raise ValueError("Stance manifest context hash is incompatible with the replay.")
+    if manifest.get("classification_policy") != {
+        "policy_id": "comment_stance_likert5_structured_v1",
+        "missing_parent_policy": "SKIPPED",
+        "thread_context": "immediate_parent_only",
+        "text_authority": "original",
+    }:
+        raise ValueError("Stance manifest classification policy is incompatible.")
     input_ref = manifest.get("input_ref")
     if input_ref is not None and Path(str(input_ref)).absolute() != source_path.absolute():
         raise ValueError("Stance manifest input_ref differs from the Silver source.")
@@ -450,6 +471,7 @@ def run_causal_end_to_end_replay(
         source_path=str(source_path),
         output_dir=str(root / "candidate_evidence"),
     )
+    g2_gate_config = actual.rag.g2_gate or G2GatePolicyConfig()
 
     activity_rows: list[dict[str, Any]] = []
     distribution_rows: list[dict[str, Any]] = []
@@ -744,7 +766,11 @@ def run_causal_end_to_end_replay(
                     kwargs["g1_runner"] = g1_runner
                 if g2_runner is not None:
                     kwargs["g2_runner"] = g2_runner
-                result = run_candidate_rag_validation(validation_config, **kwargs)
+                result = run_candidate_rag_validation(
+                    validation_config,
+                    g2_gate=g2_gate_config,
+                    **kwargs,
+                )
                 rag_artifacts.append(result)
                 validation_rows.extend(
                     json.loads(line)
@@ -773,6 +799,10 @@ def run_causal_end_to_end_replay(
         for manifest in rag_manifests
     ) if rag_manifests else True
     external_call_counts = {
+        "serper_request_count": sum(
+            int(manifest.get("external_calls", {}).get("serper_request_count", 0) or 0)
+            for manifest in rag_manifests
+        ),
         "query_call_count": sum(
             int(manifest.get("external_calls", {}).get("query_call_count", 0) or 0)
             for manifest in rag_manifests
@@ -833,6 +863,14 @@ def run_causal_end_to_end_replay(
             "manifest": str(replay.stance_manifest_path),
             "released_with_canonical_comment_only": True,
             "future_stances_preloaded_into_signal_state": False,
+            "topic_id": actual.topic_profile.topic_id,
+            "topic_description": actual.topic_profile.topic_description,
+            "proposition": actual.topic_profile.proposition.proposition_text,
+            "context_hash": hashlib.sha256(
+                actual.topic_profile.proposition.context.encode("utf-8")
+            ).hexdigest(),
+            "prompt_id": actual.topic_profile.stance_prompt_id,
+            "prompt_version": actual.topic_profile.stance_prompt_version,
         },
         "detection": {
             "routes": [
@@ -872,6 +910,7 @@ def run_causal_end_to_end_replay(
             "errors": rag_errors,
             "token_usage": rag_token_usage,
             "external_calls": external_call_counts,
+            "g2_gate": to_json_mapping(g2_gate_config),
         },
         "counts": {
             "comments_released": len(released_records),
@@ -890,6 +929,18 @@ def run_causal_end_to_end_replay(
             "blocked_evidence": int(evidence_counts.get("blocked_missing_video_lineage", 0)),
             "g1_executions": sum(row.get("g1_result") is not None for row in validation_rows),
             "g2_executions": sum(row.get("g2_result") is not None for row in validation_rows),
+            "g2_eligible": sum(
+                row.get("g2_execution_status") != "NOT_ELIGIBLE"
+                for row in validation_rows
+            ),
+            "g2_skipped_by_gate": sum(
+                row.get("g2_execution_status") == "SKIPPED_BY_G1_GATE"
+                for row in validation_rows
+            ),
+            "g2_failed": sum(
+                row.get("g2_execution_status") == "FAILED"
+                for row in validation_rows
+            ),
             "candidate_validation_results": len(validation_rows),
         },
         "causality": {

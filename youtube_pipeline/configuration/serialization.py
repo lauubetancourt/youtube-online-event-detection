@@ -36,6 +36,7 @@ from .models import (
     DataConfig,
     DetectionConfig,
     PolarizationConfig,
+    RagConfig,
     RunConfig,
     SignalsConfig,
     SimulationConfig,
@@ -114,11 +115,19 @@ _OMITTED_NONE_FIELDS_BY_TYPE: dict[type, frozenset[str]] = {
     ),
     PolarizationConfig: frozenset({"measure_id", "esteban_ray", "emd_pol", "mec", "classifier", "runtime"}),
     RunConfig: frozenset(
-        {"data", "association", "polarization", "rag", "artifacts"}
+        {
+            "data",
+            "association",
+            "polarization",
+            "rag",
+            "artifacts",
+            "topic_profile",
+        }
     ),
     SignalsConfig: frozenset({"daily", "activity", "polarization"}),
     SimulationConfig: frozenset({"replay", "causal_end_to_end"}),
     RagG2HierarchicalConfig: frozenset({"external_evidence_cutoff_utc"}),
+    RagConfig: frozenset({"g2_gate"}),
 }
 
 

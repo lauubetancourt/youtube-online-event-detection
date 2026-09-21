@@ -523,6 +523,7 @@ def resolve_run_config_paths(
                 if rag.candidate_validation is not None
                 else None
             ),
+            g2_gate=rag.g2_gate,
         )
 
     return RunConfig(
@@ -535,6 +536,7 @@ def resolve_run_config_paths(
         polarization=polarization,
         rag=rag,
         artifacts=config.artifacts,
+        topic_profile=config.topic_profile,
     )
 
 

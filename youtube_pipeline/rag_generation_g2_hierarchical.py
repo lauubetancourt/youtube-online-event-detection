@@ -1937,6 +1937,7 @@ def run_rag_g2_hierarchical_from_config(
     video_reports: list[dict[str, Any]] = []
     per_video_runs: list[dict[str, Any]] = []
     external_causality_audit: list[dict[str, Any]] = []
+    serper_request_count = 0
 
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY was not found; no provider fallback attempted.")
@@ -2089,6 +2090,7 @@ def run_rag_g2_hierarchical_from_config(
                 )
             else:
                 retrieved_at_utc = _utc_now_iso()
+                serper_request_count += 1
                 serper_response = _call_serper_news(
                     api_key=serper_api_key,
                     query=str(query_record.get("primary_event_query", "")),
@@ -2463,6 +2465,7 @@ def run_rag_g2_hierarchical_from_config(
             for item in raw_records
             if item.get("record_type") == "video_validation_generation"
         ),
+        "serper_request_count": serper_request_count,
         "max_retries": config.max_retries,
         "retry_count": sum(1 for item in manifest_errors if item.get("type") == "retry"),
         "errors": manifest_errors,
@@ -2492,6 +2495,7 @@ def run_rag_g2_hierarchical_from_config(
         "next_batch_required": manifest["next_batch_required"],
         "query_call_count": manifest["query_call_count"],
         "validation_call_count": manifest["validation_call_count"],
+        "serper_request_count": manifest["serper_request_count"],
         "external_evidence_count": len(all_external_evidence),
         "per_video_runs": per_video_runs,
         "pending_video_runs": manifest["pending_video_runs"],

@@ -146,6 +146,7 @@ def _with_output_root(config: RunConfig, *, output_root: Path) -> RunConfig:
             sidecars_dir=relocated_sidecars_dir,
             output_dir=relocated_selection_dir,
         ),
+        g2_gate=config.rag.g2_gate,
     )
     return RunConfig(
         identity=config.identity,
@@ -156,6 +157,7 @@ def _with_output_root(config: RunConfig, *, output_root: Path) -> RunConfig:
         association=config.association,
         rag=relocated_rag,
         artifacts=config.artifacts,
+        topic_profile=config.topic_profile,
     )
 
 

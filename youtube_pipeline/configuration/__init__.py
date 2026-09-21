@@ -13,11 +13,13 @@ from youtube_pipeline.detection_association import (
 )
 from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
 from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
+from youtube_pipeline.g2_gate import G2GateDecision, G2GatePolicyConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
 from youtube_pipeline.stance_classifier import (
     CommentStanceClassifierConfig, ClassifierRetryPolicy, StanceProposition,
 )
+from youtube_pipeline.topic_profiles import TopicProfile, load_topic_profile
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
 from youtube_pipeline.polarization_measures import (
     EMDPolConfig,
@@ -50,6 +52,7 @@ __all__ = [
     "CommentStanceClassifierConfig",
     "ClassifierRetryPolicy",
     "StanceProposition",
+    "TopicProfile",
     "ActivityDetectionRouteConfig",
     "SignalDetectionRouteConfig",
     "ArtifactsConfig",
@@ -62,12 +65,15 @@ __all__ = [
     "DetectionAssociationConfig",
     "CandidateEvidencePolicyConfig",
     "CandidateRagValidationConfig",
+    "G2GateDecision",
+    "G2GatePolicyConfig",
     "CausalEndToEndReplayConfig",
     "EMDPolConfig",
     "ExperimentalInputPolicyConfig",
     "EstebanRayConfig",
     "DetectionResult",
     "load_run_config",
+    "load_topic_profile",
     "PageHinkleyConfig",
     "MECConfig",
     "PolarizationConfig",

@@ -435,6 +435,50 @@ Search-day and capacity parameters keep their existing experimental semantics;
 this integration does not calibrate them. Candidate G-2 adds an explicit
 publication-time cutoff while legacy G-2 behavior remains unchanged.
 
+## Monitoring topic profiles
+
+Stance-enabled causal experiments may reference an immutable topic profile instead
+of repeating or editing proposition/context values in Python:
+
+```text
+configs/
+├── topics/<topic_id>.json
+└── experiments/<experiment>.json
+```
+
+The experiment uses `"topic_profile": "<topic_id>"`. The referenced file contains
+`topic_id`, `topic_description`, and a `stance` object with `proposition_id`,
+`proposition`, `context`, `prompt_id`, and `prompt_version`. Loading composes those
+values into `polarization.classifier`; a conflicting inline classifier proposition
+is rejected. The resolved config stores the complete profile, not only its filename,
+so changes to the topic, proposition, context, or prompt change `config_hash`.
+
+See [`topics/example_monitoring_topic.json`](topics/example_monitoring_topic.json).
+One profile is frozen for the entire run. Historical configs without a topic profile
+retain their legacy behavior; the causal end-to-end route requires one explicitly.
+
+## G-1 to G-2 gate
+
+Candidate RAG runs can add:
+
+```json
+{
+  "rag": {
+    "g2_gate": {
+      "policy_id": "g1_gate_v1",
+      "mode": "OFF",
+      "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
+    }
+  }
+}
+```
+
+`OFF` is the behavior-preserving baseline: every G-2-eligible candidate still runs
+G-2 after G-1. `PERMISSIVE` and `STRICT` are available experiment labels, but neither
+has a hard-coded scientific meaning. A non-`OFF` run must explicitly list
+`run_g2_for_g1_statuses` using the existing G-1 status vocabulary. The decision and
+G-2 execution status are persisted; a gate skip is not a validation failure.
+
 ## Causal end-to-end replay
 
 An opt-in run may add `simulation.causal_end_to_end` with `start_utc`, `end_utc`,

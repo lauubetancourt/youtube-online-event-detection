@@ -359,12 +359,32 @@ Prompts, models, retrieval settings, labels, and artifact schemas remain owned b
 their RAG-stage configurations and modules. They do not enter `DetectionResult` or
 the core candidate contract.
 
+For the causal candidate route, G-1 now feeds a configurable resource gate before
+G-2:
+
+```text
+G-1 result
+→ G2GatePolicy
+├→ RUN_G2  → hierarchical G-2
+└→ SKIP_G2 → explicit non-error skip
+```
+
+The baseline mode is `OFF`, which preserves the previous G-2 eligibility exactly.
+Non-`OFF` status sets are experiment inputs and remain uncalibrated. The gate uses
+only the causally completed G-1 result; candidate type is metadata, not a rule.
+
 ## Configuration and traceability
 
 One execution is composed by immutable `RunConfig` sections for identity, data,
 simulation, signals, detection, RAG, and artifacts. The loader rejects unknown
 keys, applies explicit overrides after profile values, resolves paths outside domain
 modules, and serializes the effective configuration canonically.
+
+Stance-enabled causal runs also resolve one immutable `TopicProfile` containing the
+topic description, proposition, context, and stance prompt identity. An experiment
+may switch profiles between runs without editing Python, but the profile cannot
+change during replay. Its complete snapshot participates in `config_hash` and stance
+artifact compatibility checks.
 
 Minimum reconstruction chain:
 
@@ -414,6 +434,8 @@ and do not treat those locations as scientific authorities.
 | `AssociatedEventCandidate` | IMPLEMENTED_AND_ACTIVE | Neutral finalized-association projection with candidate-scoped evidence handoff |
 | Candidate evidence policy | IMPLEMENTED_AND_ACTIVE | Causal Silver inventory and explicit RAG compatibility adapter |
 | Candidate evidence RAG integration | IMPLEMENTED_OPT_IN | Persisted candidate evidence reaches unchanged G-1 and hierarchical G-2; validation remains experimental |
+| Monitoring `TopicProfile` | IMPLEMENTED_OPT_IN | Proposition/context are resolved from config, frozen per run, and included in config/stance lineage |
+| G-1→G-2 resource gate | IMPLEMENTED_NOT_CALIBRATED | `OFF` preserves baseline; non-OFF eligible statuses are explicit experimental inputs |
 | Daily frequency baseline | IMPLEMENTED_AND_ACTIVE | Specialized daily point-candidate path |
 | Retrospective RAG evidence/sidecars | IMPLEMENTED_AND_ACTIVE | Current reference contracts |
 | Daily RAG sidecars/consumer/selection | IMPLEMENTED_AND_ACTIVE | Non-generative daily chain |

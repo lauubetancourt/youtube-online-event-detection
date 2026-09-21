@@ -28,6 +28,7 @@ from youtube_pipeline.detection_alerts import DetectionGapPolicyConfig
 from youtube_pipeline.detection_association import DetectionAssociationConfig
 from youtube_pipeline.candidate_evidence import CandidateEvidencePolicyConfig
 from youtube_pipeline.candidate_rag import CandidateRagValidationConfig
+from youtube_pipeline.g2_gate import G2GatePolicyConfig
 from youtube_pipeline.experimental_input import ExperimentalInputPolicyConfig
 from youtube_pipeline.prepared_replay import PreparedDatasetConfig, ReplayConfig
 from youtube_pipeline.polarization_signals import PolarizationTemporalSignalConfig
@@ -50,6 +51,7 @@ from youtube_pipeline.rag_sidecars import RagSidecarBuildConfig
 from youtube_pipeline.rag_validation import RagValidationPrepareConfig
 from youtube_pipeline.storage import LocalFilesConfig
 from youtube_pipeline.causal_replay_config import CausalEndToEndReplayConfig
+from youtube_pipeline.topic_profiles import TopicProfile
 
 
 RUN_MODE_DEFAULT_TRACE_LEVEL = {
@@ -400,6 +402,7 @@ class RagConfig:
     daily_context_selection: DailyContextSelectionConfig | None = None
     candidate_evidence: CandidateEvidencePolicyConfig | None = None
     candidate_validation: CandidateRagValidationConfig | None = None
+    g2_gate: G2GatePolicyConfig | None = None
 
     def __post_init__(self) -> None:
         _require_optional_instance("evidence", self.evidence, RagEvidenceBuildConfig)
@@ -438,6 +441,7 @@ class RagConfig:
             self.candidate_validation,
             CandidateRagValidationConfig,
         )
+        _require_optional_instance("g2_gate", self.g2_gate, G2GatePolicyConfig)
         if all(
             config is None
             for config in (
@@ -471,6 +475,7 @@ class RunConfig:
     rag: RagConfig | None = None
     artifacts: ArtifactsConfig | None = None
     association: DetectionAssociationConfig | None = None
+    topic_profile: TopicProfile | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, RunIdentityConfig):
@@ -489,6 +494,27 @@ class RunConfig:
         )
         _require_optional_instance("rag", self.rag, RagConfig)
         _require_optional_instance("artifacts", self.artifacts, ArtifactsConfig)
+        _require_optional_instance("topic_profile", self.topic_profile, TopicProfile)
+        classifier = (
+            self.polarization.classifier
+            if self.polarization is not None
+            else None
+        )
+        if self.topic_profile is not None and classifier is not None:
+            if classifier.proposition != self.topic_profile.proposition:
+                raise ValueError(
+                    "TopicProfile proposition/context must match polarization.classifier."
+                )
+            if (
+                classifier.prompt_id,
+                classifier.prompt_version,
+            ) != (
+                self.topic_profile.stance_prompt_id,
+                self.topic_profile.stance_prompt_version,
+            ):
+                raise ValueError(
+                    "TopicProfile prompt must match polarization.classifier."
+                )
         temporal = self.signals.polarization if self.signals is not None else None
         if temporal is not None:
             if self.polarization is None:
@@ -515,6 +541,10 @@ class RunConfig:
             else None
         )
         if causal_replay is not None:
+            if self.topic_profile is None:
+                raise ValueError(
+                    "Causal end-to-end replay requires a frozen topic_profile."
+                )
             if (
                 self.data is None
                 or self.data.local_files is None
