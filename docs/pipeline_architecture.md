@@ -436,6 +436,7 @@ and do not treat those locations as scientific authorities.
 | Candidate evidence RAG integration | IMPLEMENTED_OPT_IN | Persisted candidate evidence reaches unchanged G-1 and hierarchical G-2; validation remains experimental |
 | Monitoring `TopicProfile` | IMPLEMENTED_OPT_IN | Proposition/context are resolved from config, frozen per run, and included in config/stance lineage |
 | G-1→G-2 resource gate | IMPLEMENTED_NOT_CALIBRATED | `OFF` preserves baseline; non-OFF eligible statuses are explicit experimental inputs |
+| External-evidence temporal audit | IMPLEMENTED_INCONCLUSIVE | Deterministic source/candidate audit exists; retained legacy dates and missing cutoffs do not establish causal availability |
 | Daily frequency baseline | IMPLEMENTED_AND_ACTIVE | Specialized daily point-candidate path |
 | Retrospective RAG evidence/sidecars | IMPLEMENTED_AND_ACTIVE | Current reference contracts |
 | Daily RAG sidecars/consumer/selection | IMPLEMENTED_AND_ACTIVE | Non-generative daily chain |
@@ -472,3 +473,7 @@ existing G-1/G-2 compatibility path. See
 [`causal_end_to_end_replay.md`](causal_end_to_end_replay.md). This establishes
 technical causal replay readiness; all methodological parameters remain
 experimental and uncalibrated.
+
+The deterministic [external-evidence temporal audit](external_evidence_temporal_audit.md)
+keeps candidate time, evidence cutoff, and publication time distinct. It does not
+change the current Serper/G-2 policy or execute retrieval.
