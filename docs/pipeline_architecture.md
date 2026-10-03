@@ -437,6 +437,8 @@ and do not treat those locations as scientific authorities.
 | Monitoring `TopicProfile` | IMPLEMENTED_OPT_IN | Proposition/context are resolved from config, frozen per run, and included in config/stance lineage |
 | G-1→G-2 resource gate | IMPLEMENTED_NOT_CALIBRATED | `OFF` preserves baseline; non-OFF eligible statuses are explicit experimental inputs |
 | External-evidence temporal audit | IMPLEMENTED_INCONCLUSIVE | Deterministic source/candidate audit exists; retained legacy dates and missing cutoffs do not establish causal availability |
+| LLM token/context audit | IMPLEMENTED_PARTIAL_EVIDENCE | Stance, G-1, and G-2 usage/coverage are auditable; retained G-1 and stance row-level samples remain incomplete |
+| G-1 gate/context experiment | EXECUTED_INCONCLUSIVE | Ten paired G-1/G-2 candidates show no gate savings because all FULL G-1 results are confirmed; reduced-context evidence remains exploratory and no runtime policy changed |
 | Daily frequency baseline | IMPLEMENTED_AND_ACTIVE | Specialized daily point-candidate path |
 | Retrospective RAG evidence/sidecars | IMPLEMENTED_AND_ACTIVE | Current reference contracts |
 | Daily RAG sidecars/consumer/selection | IMPLEMENTED_AND_ACTIVE | Non-generative daily chain |
@@ -477,3 +479,7 @@ experimental and uncalibrated.
 The deterministic [external-evidence temporal audit](external_evidence_temporal_audit.md)
 keeps candidate time, evidence cutoff, and publication time distinct. It does not
 change the current Serper/G-2 policy or execute retrieval.
+
+The [LLM token/context audit](llm_token_context_audit.md) measures provider usage,
+application estimates, evidence coverage, and gate counterfactuals without changing
+prompts, budgets, selection, or the `OFF` gate baseline.

@@ -1,0 +1,18 @@
+{
+  "output_dir": "outputs/llm_token_context_audit",
+  "stance_artifact_dir": "outputs/polarization_runtime_smoke_20260919",
+  "stance_comments_path": "data/comments.csv",
+  "event_comment_inventory_path": "experiments/xiao/media/log_3/rag_sidecars/event_comment_inventory.csv",
+  "context_units_path": "experiments/xiao/media/log_3/rag_sidecars/rag_context_units.jsonl",
+  "context_unit_comment_map_path": "experiments/xiao/media/log_3/rag_sidecars/context_unit_comment_map.csv",
+  "validation_inputs_path": "experiments/xiao/media/log_3/rag_consumer/rag_validation_inputs.jsonl",
+  "context_payloads_path": "experiments/xiao/media/log_3/rag_consumer/rag_context_payloads.jsonl",
+  "g1_raw_responses_path": "experiments/xiao/media/log_3/rag_generation_g1/rag_raw_model_responses.jsonl",
+  "g1_reports_path": "experiments/xiao/media/log_3/rag_generation_g1/rag_validation_reports.jsonl",
+  "g1_manifest_path": "experiments/xiao/media/log_3/rag_generation_g1/rag_generation_manifest.json",
+  "g2_raw_responses_path": "experiments/xiao/media/log_3/rag_generation_g2_hierarchical_batch_auto_lot1/rag_raw_model_responses.jsonl",
+  "g2_queries_path": "experiments/xiao/media/log_3/rag_generation_g2_hierarchical_batch_auto_lot1/rag_video_news_queries.jsonl",
+  "g2_external_evidence_path": "experiments/xiao/media/log_3/rag_generation_g2_hierarchical_batch_auto_lot1/rag_video_external_evidence.jsonl",
+  "g2_video_reports_path": "experiments/xiao/media/log_3/rag_generation_g2_hierarchical_batch_auto_lot1/rag_video_validation_reports.jsonl",
+  "g2_manifest_path": "experiments/xiao/media/log_3/rag_generation_g2_hierarchical_batch_auto_lot1/rag_generation_manifest.json"
+}

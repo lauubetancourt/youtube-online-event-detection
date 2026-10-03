@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import shutil
@@ -70,7 +71,12 @@ from youtube_pipeline.rag_generation_g2_hierarchical import (
 )
 from youtube_pipeline.stance_classifier import (
     CommentStanceClassifierConfig,
+    StanceModelResponse,
     StanceProposition,
+)
+from youtube_pipeline.stance_classifier_io import (
+    prepare_csv_stance_inputs,
+    run_configured_comment_stance_classification,
 )
 from youtube_pipeline.storage import LocalFilesConfig
 from youtube_pipeline.topic_profiles import TopicProfile
@@ -113,6 +119,15 @@ class _FirstUpdateDetector:
             triggered=self.trigger and self.count == 1,
             quality=observation.quality,
             detector_metadata={"observations_processed": self.count, "test_only": True},
+        )
+
+
+class _SuccessfulStanceTransport:
+    async def complete(self, *, config, messages) -> StanceModelResponse:
+        return StanceModelResponse(
+            '{"status":"CLASSIFIED","stance":3}',
+            response_id="test-only",
+            finish_reason="stop",
         )
 
 
@@ -176,7 +191,15 @@ class _MockRag:
         return {"event_summary": summary}
 
 
-def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
+def _fixture(
+    root: Path,
+    *,
+    run_id: str,
+    output_name: str,
+    published_at_only: bool = False,
+    classification_run_id: str | None = None,
+) -> RunConfig:
+    actual_classification_run_id = classification_run_id or run_id
     comments = root / "silver_comments.csv"
     videos = root / "silver_videos.csv"
     stances = root / "precomputed_stances.jsonl"
@@ -201,7 +224,11 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
             "is_reply": False,
         },
     ]
-    pd.DataFrame(rows).to_csv(comments, index=False)
+    source_rows = [dict(row) for row in rows]
+    if published_at_only:
+        for row in source_rows:
+            row["published_at"] = row.pop("event_time_utc")
+    pd.DataFrame(source_rows).to_csv(comments, index=False)
     pd.DataFrame([{"video_id": "video-a", "title": "Video A"}]).to_csv(
         videos, index=False
     )
@@ -224,7 +251,7 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
     )
     _write_json(stance_manifest, {
         "artifact_version": "stance_classifier_v1",
-        "classifier_run_id": run_id,
+        "classifier_run_id": actual_classification_run_id,
         "model": "gpt-4.1-2025-04-14",
         "prompt_id": "comment_stance_likert5",
         "prompt_version": "1",
@@ -258,7 +285,7 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
     )
     temporal = PolarizationTemporalSignalConfig(
         proposition_id="prop-a",
-        classification_run_id=run_id,
+        classification_run_id=actual_classification_run_id,
         window="4min",
         cadence="2min",
         start_time_utc=START,
@@ -326,6 +353,261 @@ def _fixture(root: Path, *, run_id: str, output_name: str) -> RunConfig:
 
 
 class CausalEndToEndTests(unittest.TestCase):
+    @staticmethod
+    def _no_trigger_detector(detector_id: str, _config):
+        return _FirstUpdateDetector(detector_id, trigger=False)
+
+    def test_distinct_experiment_and_classification_runs_replay_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(
+                root,
+                run_id="d1_c1_b",
+                output_name="out",
+                classification_run_id="d1_c1_stance",
+            )
+            artifacts = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                detector_factory=self._no_trigger_detector,
+            )
+            manifest = json.loads(artifacts.manifest_path.read_text())
+            polarization_manifest = json.loads(
+                (artifacts.output_dir / "polarization_signal_manifest.json").read_text()
+            )
+            resolved_config = json.loads(
+                (artifacts.output_dir / "resolved_config.json").read_text()
+            )
+            observations = _read_jsonl(
+                artifacts.output_dir / "polarization_signal_observations.jsonl"
+            )
+
+        self.assertEqual(manifest["experiment_run_id"], "d1_c1_b")
+        self.assertEqual(manifest["classification_run_id"], "d1_c1_stance")
+        self.assertEqual(
+            manifest["stance"]["classification_run_id"], "d1_c1_stance"
+        )
+        self.assertEqual(
+            polarization_manifest["experiment_run_id"], "d1_c1_b"
+        )
+        self.assertEqual(
+            polarization_manifest["classification_run_id"], "d1_c1_stance"
+        )
+        self.assertEqual(resolved_config["identity"]["run_id"], "d1_c1_b")
+        self.assertEqual(
+            resolved_config["signals"]["polarization"]["classification_run_id"],
+            "d1_c1_stance",
+        )
+        self.assertGreater(len(observations), 0)
+        self.assertEqual(
+            {row["metadata"]["classification_run_id"] for row in observations},
+            {"d1_c1_stance"},
+        )
+
+    def test_csv_native_classifier_manifest_is_accepted_by_same_source_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            consumer = _fixture(
+                root,
+                run_id="d1_c1_b",
+                output_name="out",
+                published_at_only=True,
+                classification_run_id="d1_c1_stance",
+            )
+            assert consumer.data is not None
+            assert consumer.data.local_files is not None
+            source = Path(consumer.data.local_files.comments_path)
+            producer = replace(
+                consumer,
+                identity=RunIdentityConfig("d1_c1_stance"),
+            )
+            plan = prepare_csv_stance_inputs(producer, source)
+            classifier_output = root / "csv-native-stances"
+            produced = asyncio.run(run_configured_comment_stance_classification(
+                producer,
+                plan.comments,
+                output_dir=classifier_output,
+                base_dir=root,
+                transport=_SuccessfulStanceTransport(),
+                input_ref=str(plan.authoritative_source_path),
+            ))
+            replay = consumer.simulation.causal_end_to_end
+            assert replay is not None
+            consumer = replace(
+                consumer,
+                simulation=SimulationConfig(causal_end_to_end=replace(
+                    replay,
+                    stance_artifact_path=produced.artifact_path,
+                    stance_manifest_path=produced.manifest_path,
+                )),
+            )
+
+            artifacts = run_causal_end_to_end_replay(
+                consumer,
+                base_dir=root,
+                detector_factory=self._no_trigger_detector,
+            )
+            classifier_manifest = json.loads(produced.manifest_path.read_text())
+            replay_manifest = json.loads(artifacts.manifest_path.read_text())
+            expected_source_path = str(source.absolute())
+            expected_source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+
+        self.assertEqual(classifier_manifest["input_ref"], expected_source_path)
+        self.assertEqual(
+            classifier_manifest["input_source_sha256"],
+            expected_source_hash,
+        )
+        self.assertEqual(classifier_manifest["classifier_run_id"], "d1_c1_stance")
+        self.assertEqual(replay_manifest["experiment_run_id"], "d1_c1_b")
+        self.assertEqual(replay_manifest["classification_run_id"], "d1_c1_stance")
+
+    def test_same_stance_artifact_is_reused_by_a_b_and_c(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = _fixture(
+                root,
+                run_id="d1_c1_stance",
+                output_name="unused",
+                classification_run_id="d1_c1_stance",
+            )
+            replay = template.simulation.causal_end_to_end
+            assert replay is not None
+            shared_paths = (
+                replay.stance_artifact_path,
+                replay.stance_manifest_path,
+            )
+            manifests = []
+            for experiment_run_id in ("d1_c1_a", "d1_c1_b", "d1_c1_c"):
+                config = replace(
+                    template,
+                    identity=RunIdentityConfig(experiment_run_id),
+                    simulation=SimulationConfig(causal_end_to_end=replace(
+                        replay,
+                        output_dir=root / experiment_run_id,
+                    )),
+                )
+                actual_replay = config.simulation.causal_end_to_end
+                assert actual_replay is not None
+                self.assertEqual(
+                    (
+                        actual_replay.stance_artifact_path,
+                        actual_replay.stance_manifest_path,
+                    ),
+                    shared_paths,
+                )
+                artifacts = run_causal_end_to_end_replay(
+                    config,
+                    base_dir=root,
+                    detector_factory=self._no_trigger_detector,
+                )
+                manifests.append(json.loads(artifacts.manifest_path.read_text()))
+
+        self.assertEqual(
+            [manifest["experiment_run_id"] for manifest in manifests],
+            ["d1_c1_a", "d1_c1_b", "d1_c1_c"],
+        )
+        self.assertEqual(
+            {manifest["classification_run_id"] for manifest in manifests},
+            {"d1_c1_stance"},
+        )
+
+    def test_legacy_equal_run_ids_remain_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(root, run_id="legacy-run", output_name="out")
+            artifacts = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                detector_factory=self._no_trigger_detector,
+            )
+            manifest = json.loads(artifacts.manifest_path.read_text())
+
+        self.assertEqual(manifest["experiment_run_id"], "legacy-run")
+        self.assertEqual(manifest["classification_run_id"], "legacy-run")
+
+    def test_stance_reuse_rejects_wrong_classifier_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(
+                root,
+                run_id="d1_c1_b",
+                output_name="out",
+                classification_run_id="d1_c1_stance",
+            )
+            manifest_path = root / "classifier_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["classifier_run_id"] = "d1_c2_stance"
+            _write_json(manifest_path, manifest)
+
+            with self.assertRaisesRegex(ValueError, "classifier_run_id"):
+                run_causal_end_to_end_replay(config, base_dir=root)
+
+    def test_stance_reuse_rejects_wrong_topic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(
+                root,
+                run_id="d1_c1_b",
+                output_name="out",
+                classification_run_id="d1_c1_stance",
+            )
+            manifest_path = root / "classifier_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["topic_id"] = "d1-c2"
+            _write_json(manifest_path, manifest)
+
+            with self.assertRaisesRegex(ValueError, "topic_id"):
+                run_causal_end_to_end_replay(config, base_dir=root)
+
+    def test_stance_reuse_rejects_wrong_source_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(
+                root,
+                run_id="d1_c1_b",
+                output_name="out",
+                classification_run_id="d1_c1_stance",
+            )
+            comments_path = root / "silver_comments.csv"
+            comments = pd.read_csv(comments_path)
+            comments.loc[0, "text"] = "Fuente incompatible"
+            comments.to_csv(comments_path, index=False)
+
+            with self.assertRaisesRegex(ValueError, "source hash"):
+                run_causal_end_to_end_replay(config, base_dir=root)
+
+    def test_published_at_only_source_reaches_activity_and_polarization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(
+                root,
+                run_id="published-at-run",
+                output_name="out",
+                published_at_only=True,
+            )
+
+            def detector_factory(detector_id: str, _config):
+                return _FirstUpdateDetector(detector_id, trigger=False)
+
+            artifacts = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                detector_factory=detector_factory,
+            )
+            manifest = json.loads(artifacts.manifest_path.read_text())
+            activity = _read_jsonl(
+                artifacts.output_dir / "activity_observations.jsonl"
+            )
+            polarization = _read_jsonl(
+                artifacts.output_dir / "polarization_signal_observations.jsonl"
+            )
+
+        self.assertGreater(len(activity), 0)
+        self.assertGreater(len(polarization), 0)
+        self.assertEqual(artifacts.future_leak_count, 0)
+        self.assertEqual(manifest["counts"]["event_candidates"], 0)
+        self.assertEqual(manifest["status"], "executed_successfully")
+
     def test_stance_reuse_rejects_changed_proposition_or_context(self) -> None:
         for field, value in (
             ("proposition_text", "Una proposición diferente."),

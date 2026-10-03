@@ -42,19 +42,97 @@ def _utc_now_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _timestamp_error_context(
+    dataframe: pd.DataFrame,
+    *,
+    position: int,
+    field: str,
+    value: object,
+) -> str:
+    comment_id = None
+    if "comment_id" in dataframe.columns:
+        candidate = dataframe.iloc[position]["comment_id"]
+        if not pd.isna(candidate):
+            comment_id = str(candidate)
+    rendered_id = repr(comment_id) if comment_id is not None else "<unknown>"
+    return f"comment_id={rendered_id}, field={field!r}, value={value!r}"
+
+
 def _normalize_timestamp_column(
-    df: pd.DataFrame, source_col: str, raw_col: str
+    dataframe: pd.DataFrame,
+    *,
+    source_col: str,
+    raw_col: str | None = None,
+    require_explicit_timezone: bool = False,
 ) -> pd.Series:
-    if source_col not in df.columns:
+    if source_col not in dataframe.columns:
         raise KeyError(f"Column '{source_col}' not found in dataframe.")
-    df[raw_col] = df[source_col].astype(str)
-    ts = pd.to_datetime(df[source_col], utc=True, errors="coerce")
-    if ts.isna().any():
-        bad_rows = int(ts.isna().sum())
-        raise ValueError(
-            f"{bad_rows} rows have invalid timestamps in column '{source_col}'."
+    if raw_col is not None:
+        dataframe[raw_col] = dataframe[source_col].astype(str)
+    if not require_explicit_timezone:
+        timestamps = pd.to_datetime(dataframe[source_col], utc=True, errors="coerce")
+        if timestamps.isna().any():
+            bad_rows = int(timestamps.isna().sum())
+            raise ValueError(
+                f"{bad_rows} rows have invalid timestamps in column '{source_col}'."
+            )
+        return timestamps
+
+    normalized: list[pd.Timestamp] = []
+    for position, value in enumerate(dataframe[source_col].tolist()):
+        context = _timestamp_error_context(
+            dataframe,
+            position=position,
+            field=source_col,
+            value=value,
         )
-    return ts
+        try:
+            missing = bool(pd.isna(value))
+        except (TypeError, ValueError):
+            missing = False
+        if missing:
+            raise ValueError(f"Comment timestamp is missing: {context}.")
+        try:
+            timestamp = pd.Timestamp(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"Comment timestamp is invalid: {context}.") from exc
+        if timestamp.tzinfo is None:
+            raise ValueError(
+                "Comment timestamp must include an explicit timezone or UTC offset: "
+                f"{context}."
+            )
+        normalized.append(timestamp.tz_convert("UTC"))
+    return pd.Series(normalized, index=dataframe.index, dtype="datetime64[ns, UTC]")
+
+
+def canonicalize_comment_event_time(
+    comments_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return comments with one validated, timezone-aware UTC event-time field.
+
+    An existing ``event_time_utc`` column is authoritative.  Otherwise the source
+    ``published_at`` column is adapted in memory.  Source columns and row order are
+    preserved; this adapter adds no derived calendar, Unix-time, or text fields.
+    """
+
+    if not isinstance(comments_df, pd.DataFrame):
+        raise TypeError("comments_df must be a pandas DataFrame.")
+    if "event_time_utc" in comments_df.columns:
+        source_field = "event_time_utc"
+    elif "published_at" in comments_df.columns:
+        source_field = "published_at"
+    else:
+        raise ValueError(
+            "Comment input requires 'event_time_utc' or source field 'published_at'."
+        )
+
+    out = comments_df.copy()
+    out["event_time_utc"] = _normalize_timestamp_column(
+        out,
+        source_col=source_field,
+        require_explicit_timezone=True,
+    )
+    return out
 
 
 def _unix_seconds(ts: pd.Series) -> pd.Series:

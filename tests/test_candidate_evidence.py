@@ -132,6 +132,28 @@ def _packages(path: Path) -> list[dict[str, object]]:
 
 
 class CandidateEvidenceTests(unittest.TestCase):
+    def test_published_at_only_source_builds_candidate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.csv"
+            row = _row("c1", REFERENCE, "source timestamp")
+            row["published_at"] = row.pop("event_time_utc")
+            _write_source(source, [row])
+
+            artifacts = build_candidate_evidence(
+                candidates=[_candidate()],
+                config=_config(source, root / "out"),
+            )
+            inventory = pd.read_csv(
+                artifacts.output_dir / CANDIDATE_COMMENT_INVENTORY_FILE
+            )
+
+        self.assertEqual(inventory["comment_id"].tolist(), ["c1"])
+        self.assertEqual(
+            pd.Timestamp(inventory.loc[0, "event_time_utc"]),
+            pd.Timestamp(REFERENCE),
+        )
+
     def test_config_is_strict_immutable_resolved_and_hash_visible(self) -> None:
         payload = {
             "identity": {"run_id": "evidence-config"},

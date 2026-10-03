@@ -155,6 +155,8 @@ contracts.
 | Profiles, `RunConfig`, resolved paths, hashes, and identities | [`configs/README.md`](configs/README.md) |
 | Hierarchical G-2 implementation | [`docs/rag_g2_hierarchical_implementation.md`](docs/rag_g2_hierarchical_implementation.md) |
 | External-evidence temporal audit | [`docs/external_evidence_temporal_audit.md`](docs/external_evidence_temporal_audit.md) |
+| LLM token/context audit | [`docs/llm_token_context_audit.md`](docs/llm_token_context_audit.md) |
+| G-1 gate/context stability experiment | [`docs/g1_gate_context_stability_experiment.md`](docs/g1_gate_context_stability_experiment.md) |
 | Cyclic temporal semantics and implementation history | [`docs/cyclic_ingestion_simulation_design.md`](docs/cyclic_ingestion_simulation_design.md) |
 
 Historical audits, regression reports, PoCs, and experiment registries retain the

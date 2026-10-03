@@ -43,6 +43,20 @@ must not be presented as source facts.
 signals, and detection. It is not ingestion time. The current prepared corpus does
 not provide distinct durable `observed_at_utc` or `ingested_at_utc` fields.
 
+A source comment input may provide `published_at` instead of `event_time_utc`.
+The comment input adapter validates an existing `event_time_utc` as authoritative,
+or derives it in memory from `published_at` when the canonical field is absent.
+Both inputs must include an explicit timezone or UTC offset; naive and invalid
+timestamps are rejected. The adapter preserves `published_at` for lineage and does
+not assign a default local timezone.
+
+```text
+published_at
+→ canonical input normalization
+→ event_time_utc
+→ causal_minimal_v1
+```
+
 Temporal invariants:
 
 - timestamps used by the runtime are timezone-aware;
@@ -92,6 +106,7 @@ outside this contract and belong to STAB-DATA-01.
 | `author_id` | Author/channel reference | Optional at source; missingness affects unique-author signal quality |
 | `text` | Raw comment text | Required by current XIAO compatibility path and RAG evidence |
 | `reply_to_comment_id` | Parent reference | Optional; supports thread reconstruction |
+| `published_at` | Source publication time | Optional source field; accepted as input when `event_time_utc` is absent and preserved for lineage |
 | `event_time_utc` | Canonical event time | Required by prepared replay and temporal stages |
 | `event_time_unix_s` | Canonical numeric event time | Required for new persisted artifacts when numeric time is needed |
 | `text_clean` | Cleaned representation | Produced by cleaning when that stage is used |
@@ -128,8 +143,9 @@ from a single mutable counter.
 ## Experimental causal input policy
 
 `causal_minimal_v1` is an opt-in runtime policy for new activity and stance
-executions. It reads the existing Silver comment artifact and applies only schema
-validation, stable typing, UTC validation, exact `comment_id` deduplication,
+executions. Before the policy runs, the source/input adapter guarantees the
+canonical `event_time_utc` field. The policy then applies only schema validation,
+stable typing, UTC validation, exact `comment_id` deduplication,
 deterministic `(event_time_utc, comment_id)` ordering, and source lineage. It
 preserves original text as the semantic authority and does not remove short text,
 emoji, replies, repeated text with distinct IDs, or spam-like observations.
@@ -147,8 +163,9 @@ same configured source path/hash without changing existing RAG sidecars.
 
 ## Prepared dataset contract
 
-A prepared comment dataset used by current replay/cyclic paths must provide, at
-minimum:
+A source comment dataset used by the experimental replay/cyclic paths may provide
+either `event_time_utc` or timezone-aware `published_at`. After canonical input
+normalization, the internal prepared contract must provide, at minimum:
 
 ```text
 comment_id

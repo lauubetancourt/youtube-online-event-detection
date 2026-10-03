@@ -28,9 +28,11 @@ from youtube_pipeline.experimental_input import (
     adapt_activity_records,
     adapt_stance_records,
     prepare_causal_minimal_batch,
+    read_input_table,
 )
 from youtube_pipeline.polarization_runtime import prepare_polarization_runtime
 from youtube_pipeline.run_pipeline import run_clean
+from youtube_pipeline.storage import canonicalize_comment_event_time
 
 
 UTC = timezone.utc
@@ -62,6 +64,41 @@ def _policy() -> ExperimentalInputPolicyConfig:
 
 
 class ExperimentalInputPolicyTests(unittest.TestCase):
+    def test_real_youtube_csv_schema_is_canonicalized_before_causal_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "d1_sample.csv"
+            pd.DataFrame([{
+                "video_id": "v1",
+                "comment_id": "c1",
+                "text": "Comentario original",
+                "author_name": "Autor",
+                "author_id": "a1",
+                "published_at": "2026-04-20T09:00:00-05:00",
+                "likes": 3,
+                "is_reply": False,
+                "reply_to_comment_id": None,
+            }]).to_csv(source, index=False)
+
+            loaded = read_input_table(source)
+            canonical = canonicalize_comment_event_time(loaded)
+            batch = prepare_causal_minimal_batch(
+                canonical,
+                _policy(),
+                source_path=source,
+            )
+
+        self.assertEqual(len(batch.records), 1)
+        self.assertEqual(batch.records[0].comment_id, "c1")
+        self.assertEqual(
+            batch.records[0].event_time_utc,
+            datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        )
+        self.assertIn("published_at", batch.dataframe.columns)
+        self.assertEqual(
+            batch.dataframe.loc[0, "published_at"],
+            "2026-04-20T09:00:00-05:00",
+        )
+
     def test_config_is_strict_immutable_serialized_and_hash_visible(self) -> None:
         payload = {
             "identity": {"run_id": "policy-test"},

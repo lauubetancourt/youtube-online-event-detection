@@ -96,7 +96,14 @@ Los tipos son frozen/slots; se rechazan claves desconocidas, números no finitos
 tipos inválidos y bool como número. Ningún secreto entra en RunConfig o su hash.
 Las configuraciones anteriores de medidas aisladas y señales siguen funcionando.
 
-El input JSONL contiene comment_id, author_id nullable, event_time_utc UTC, text,
+El runner acepta dos fronteras de entrada mutuamente excluyentes. La ruta nativa
+`--comments-path` recibe el CSV autoritativo de comentarios, canonicaliza en memoria
+`published_at` a `event_time_utc`, aplica `causal_minimal_v1` y reutiliza el adapter
+de stance para construir `StanceCommentInput`. No materializa un JSONL intermedio:
+el CSV conserva la identidad de fuente en todo el proceso. La ruta heredada
+`--input-jsonl` sigue disponible y en ese caso el propio JSONL es la fuente.
+
+El input JSONL heredado contiene comment_id, author_id nullable, event_time_utc UTC, text,
 y opcionalmente parent_comment_id, parent_text, parent_event_time_utc e is_deleted.
 Un padre explícito exige identidad y fecha para comprobar causalidad.
 No se admiten IDs duplicados dentro de una ejecución. Un comentario vacío o
@@ -105,10 +112,12 @@ eliminado se omite sin llamada. Un autor ausente permite clasificación y marca
 
 ## Ejecución y artefactos
 
-`scripts/run_comment_stance_classifier.py --config perfil.json --input-jsonl input.jsonl`
+`scripts/run_comment_stance_classifier.py --config perfil.json --comments-path comentarios.csv`
 solo valida/prepara por defecto. `--execute --output-root destino_nuevo` habilita
 inferencia explícitamente; esa ejecución puede generar cargos. No se realizaron
-llamadas reales en esta fase. `--run-id` es un override operativo disponible.
+llamadas reales en esta fase. `--run-id` es un override operativo disponible y
+`--base-dir` fija la base lógica de los paths del RunConfig. Si se omite, se conserva
+la convención heredada de usar el directorio del config.
 
 Se reutilizan requests/python-dotenv ya aprobados; no se instala el SDK OpenAI.
 El transporte HTTP llama Chat Completions vía `asyncio.to_thread`, con timeout,
@@ -123,8 +132,20 @@ existente del contrato, no un nuevo campo status paralelo.
 `classifier_manifest.json` gobierna classifier_run_id, modelo/proveedor, prompt
 versionado/hash/schema, proposición/contexto/version/hash, concurrencia, retries,
 parámetros efectivos, tokens agregados, conteos por estado y referencias/hash
-del artefacto. `resolved_config.json` conserva la configuración canónica y su
-hash vigente; no se rediseña la participación de run_id.
+del artefacto. En la ruta CSV-native, los campos vigentes `input_ref` e
+`input_source_sha256` contienen respectivamente el path absoluto y SHA-256 del CSV
+original; `classified_comment_ids_sha256` identifica el universo canónico adaptado.
+Un formato interno nunca sustituye esos valores. `resolved_config.json` conserva la
+configuración canónica y su hash vigente.
+
+En el replay causal, `identity.run_id` identifica el experimento consumidor y
+`signals.polarization.classification_run_id` identifica la corrida productora de
+`comment_stances.jsonl`. Pueden ser diferentes. La reutilización exige que el
+segundo coincida con `classifier_manifest.json.classifier_run_id`; también se
+mantienen las comprobaciones de fuente, IDs canónicos, TopicProfile, proposición,
+contexto, prompt, modelo, política de clasificación, autores y tiempos de evento.
+El runtime standalone que clasifica y agrega dentro de una sola ejecución conserva
+la identidad única histórica.
 
 HTTP 408/409/429/5xx, timeout y conexión son reintentables. Otros HTTP fallan
 sin retry. Backoff exponencial con jitter y Retry-After numérico se limita por

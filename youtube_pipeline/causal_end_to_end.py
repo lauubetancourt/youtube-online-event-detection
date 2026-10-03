@@ -67,6 +67,7 @@ from youtube_pipeline.polarization_signal_composition import (
 )
 from youtube_pipeline.polarization_signals import PolarizationTemporalTick
 from youtube_pipeline.signal_observations import SignalObservation, to_json_mapping
+from youtube_pipeline.storage import canonicalize_comment_event_time
 
 
 REPLAY_MANIFEST = "causal_replay_manifest.json"
@@ -179,9 +180,12 @@ def _validate_stance_reuse(
     assert config.polarization is not None
     assert config.polarization.classifier is not None
     classifier = config.polarization.classifier
+    assert config.signals is not None
+    assert config.signals.polarization is not None
+    classification_run_id = config.signals.polarization.classification_run_id
     assert config.topic_profile is not None
     expected = {
-        "classifier_run_id": config.identity.run_id,
+        "classifier_run_id": classification_run_id,
         "model": classifier.model,
         "prompt_id": classifier.prompt_id,
         "prompt_version": classifier.prompt_version,
@@ -405,7 +409,7 @@ def run_causal_end_to_end_replay(
         raise FileExistsError("Causal replay output directory must be empty or absent.")
     root.mkdir(parents=True, exist_ok=True)
     source_path = Path(actual.data.local_files.comments_path)
-    source = read_input_table(source_path)
+    source = canonicalize_comment_event_time(read_input_table(source_path))
     prepared = prepare_causal_minimal_batch(
         source,
         actual.data.experimental_input,
@@ -700,6 +704,8 @@ def run_causal_end_to_end_replay(
     _write_json(paths["polarization_manifest"], {
         "artifact_version": "causal_polarization_signal_v1",
         "run_id": actual.identity.run_id,
+        "experiment_run_id": actual.identity.run_id,
+        "classification_run_id": temporal.classification_run_id,
         "window": temporal.window,
         "cadence": temporal.cadence,
         "enabled_measures": list(temporal.enabled_measures),
@@ -833,6 +839,8 @@ def run_causal_end_to_end_replay(
         "prototype_status": "EXPERIMENT_READY",
         "methodological_status": replay.parameter_status,
         "run_id": actual.identity.run_id,
+        "experiment_run_id": actual.identity.run_id,
+        "classification_run_id": temporal.classification_run_id,
         "config_hash": resolved.config_hash,
         "source": {
             "path": str(source_path),
@@ -859,6 +867,7 @@ def run_causal_end_to_end_replay(
         },
         "stance": {
             "mode": replay.stance_mode,
+            "classification_run_id": temporal.classification_run_id,
             "artifact": str(replay.stance_artifact_path),
             "manifest": str(replay.stance_manifest_path),
             "released_with_canonical_comment_only": True,

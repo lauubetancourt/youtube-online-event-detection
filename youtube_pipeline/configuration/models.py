@@ -523,6 +523,11 @@ class RunConfig:
                 self.polarization.config_for(measure_id)
         elif self.polarization is not None and self.polarization.measure_id is None and self.polarization.classifier is None:
             raise ValueError("polarization.measure_id is required for isolated measures.")
+        causal_replay = (
+            self.simulation.causal_end_to_end
+            if self.simulation is not None
+            else None
+        )
         runtime = self.polarization.runtime if self.polarization is not None else None
         if runtime is not None:
             if temporal is None:
@@ -533,13 +538,11 @@ class RunConfig:
                 raise ValueError("Polarization runtime requires data.local_files.")
             if temporal.proposition_id != self.polarization.classifier.proposition.proposition_id:
                 raise ValueError("Temporal signal and classifier proposition_id must match.")
-            if temporal.classification_run_id != self.identity.run_id:
+            if (
+                causal_replay is None
+                and temporal.classification_run_id != self.identity.run_id
+            ):
                 raise ValueError("classification_run_id must equal identity.run_id for an integrated runtime.")
-        causal_replay = (
-            self.simulation.causal_end_to_end
-            if self.simulation is not None
-            else None
-        )
         if causal_replay is not None:
             if self.topic_profile is None:
                 raise ValueError(
@@ -579,10 +582,6 @@ class RunConfig:
             ):
                 raise ValueError(
                     "Causal end-to-end replay requires candidate evidence and RAG config."
-                )
-            if temporal.classification_run_id != self.identity.run_id:
-                raise ValueError(
-                    "Causal replay classification_run_id must equal identity.run_id."
                 )
             if temporal.proposition_id != self.polarization.classifier.proposition.proposition_id:
                 raise ValueError(

@@ -10,10 +10,16 @@ from pathlib import Path
 from youtube_pipeline.configuration.models import RunConfig
 from youtube_pipeline.configuration.paths import resolve_run_config
 from youtube_pipeline.signal_observations import to_json_mapping
-from youtube_pipeline.experimental_input import source_sha256
+from youtube_pipeline.experimental_input import (
+    adapt_stance_records,
+    prepare_causal_minimal_batch,
+    read_input_table,
+    source_sha256,
+)
 from youtube_pipeline.stance_classifier import (
     OpenAICommentStanceClassifier, StanceCommentInput, StanceModelTransport,
 )
+from youtube_pipeline.storage import canonicalize_comment_event_time
 from youtube_pipeline.stance_classifier_prompt import (
     REFERENCE_NOTEBOOK, REFERENCE_NOTEBOOK_SHA256, SYSTEM_INSTRUCTIONS, response_format,
 )
@@ -39,6 +45,83 @@ class ClassifierRunArtifacts:
     manifest_path: Path
     resolved_config_path: Path
     input_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CsvStanceInputPlan:
+    """In-memory classifier inputs whose identity remains the source CSV."""
+
+    comments: tuple[StanceCommentInput, ...]
+    authoritative_source_path: Path
+    authoritative_source_hash: str
+    input_policy_id: str
+    source_rows: int
+    roots: int
+    replies: int
+    replies_with_parent: int
+    missing_parents: int
+    expected_model_calls: int
+
+
+def prepare_csv_stance_inputs(
+    config: RunConfig,
+    comments_path: str | Path,
+) -> CsvStanceInputPlan:
+    """Adapt one CSV source without replacing its authoritative identity.
+
+    The source is canonicalized and adapted entirely in memory.  In particular,
+    no transport JSONL is created and the returned path/hash always describe the
+    CSV bytes that produced the classifier inputs.
+    """
+
+    if not isinstance(config, RunConfig):
+        raise TypeError("config must be RunConfig.")
+    if config.data is None or config.data.experimental_input is None:
+        raise ValueError(
+            "CSV stance input requires data.experimental_input (causal_minimal_v1)."
+        )
+    source = Path(comments_path).expanduser().absolute()
+    dataframe = read_input_table(source)
+    canonical = canonicalize_comment_event_time(dataframe)
+    batch = prepare_causal_minimal_batch(
+        canonical,
+        config.data.experimental_input,
+        source_path=source,
+    )
+    adapted = adapt_stance_records(batch.records)
+    comments = tuple(item.classifier_input for item in adapted)
+    replies = sum(record.is_reply for record in batch.records)
+    replies_with_parent = sum(
+        item.classifier_input.parent_comment_id is not None
+        and item.classifier_input.parent_text is not None
+        and item.classifier_input.parent_event_time_utc is not None
+        for item in adapted
+    )
+    expected_model_calls = sum(
+        bool(comment.text.strip())
+        and (
+            comment.parent_comment_id is None
+            or (
+                comment.parent_text is not None
+                and bool(comment.parent_text.strip())
+                and comment.parent_event_time_utc is not None
+                and comment.parent_event_time_utc <= comment.event_time_utc
+            )
+        )
+        for comment in comments
+    )
+    return CsvStanceInputPlan(
+        comments=comments,
+        authoritative_source_path=source,
+        authoritative_source_hash=batch.manifest["source_sha256"],
+        input_policy_id=config.data.experimental_input.policy_id,
+        source_rows=len(dataframe),
+        roots=len(batch.records) - replies,
+        replies=replies,
+        replies_with_parent=replies_with_parent,
+        missing_parents=replies - replies_with_parent,
+        expected_model_calls=expected_model_calls,
+    )
 
 
 async def run_configured_comment_stance_classification(

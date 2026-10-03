@@ -15,6 +15,7 @@ from youtube_pipeline.experimental_input import (
     adapt_activity_records,
     prepare_causal_minimal_batch,
 )
+from youtube_pipeline.storage import canonicalize_comment_event_time
 
 
 LOCAL_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -672,6 +673,7 @@ def build_cyclic_ingestion_dry_run(
     source_input_rows = len(raw_df)
     input_policy_manifest = None
     if input_policy is not None:
+        raw_df = canonicalize_comment_event_time(raw_df)
         prepared_batch = prepare_causal_minimal_batch(
             raw_df,
             input_policy,

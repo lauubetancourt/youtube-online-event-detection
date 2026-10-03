@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import io
 import json
 import tempfile
@@ -552,6 +553,111 @@ class ClassifierEntrypointTests(unittest.TestCase):
             manifest = json.loads((output / "classifier_manifest.json").read_text())
             self.assertEqual(manifest["counts_by_status"], {CLASSIFIED: 1})
             self.assertEqual(manifest["classifier_run_id"], "override_synthetic")
+
+    def test_csv_native_preflight_adapts_published_at_without_provider_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile.json"
+            source = root / "comments.csv"
+            output = root / "stances"
+            configured = payload()
+            configured["data"] = {
+                "local_files": {
+                    "videos_path": str(root / "videos"),
+                    "comments_path": str(source),
+                    "data_root": str(root),
+                },
+                "experimental_input": {
+                    "policy_id": "causal_minimal_v1",
+                    "source": "silver",
+                    "exact_comment_id_dedup": True,
+                    "semantic_filtering": False,
+                }
+            }
+            profile.write_text(json.dumps(configured), encoding="utf-8")
+            source.write_text(
+                "video_id,comment_id,text,author_id,published_at,is_reply,reply_to_comment_id\n"
+                "v,c1,Raíz,a1,2026-04-20T14:00:00Z,false,\n"
+                "v,c2,Respuesta,a2,2026-04-20T09:01:00-05:00,true,c1\n",
+                encoding="utf-8",
+            )
+            with patch("youtube_pipeline.stance_classifier.requests.post") as post, contextlib.redirect_stdout(io.StringIO()) as out:
+                main([
+                    "--config", str(profile),
+                    "--comments-path", str(source),
+                    "--output-root", str(output),
+                    "--run-id", "d1_c1_stance",
+                ])
+
+            prepared = json.loads(out.getvalue())
+            self.assertEqual(prepared["execution_status"], "prepared_not_executed")
+            self.assertEqual(prepared["input_mode"], "comments_csv")
+            self.assertEqual(prepared["classifier_run_id"], "d1_c1_stance")
+            self.assertEqual(prepared["input_count"], 2)
+            self.assertEqual(
+                (prepared["roots"], prepared["replies"], prepared["missing_parents"]),
+                (1, 1, 0),
+            )
+            self.assertEqual(prepared["expected_model_calls"], 2)
+            self.assertEqual(prepared["authoritative_source_path"], str(source.absolute()))
+            self.assertEqual(
+                prepared["authoritative_source_sha256"],
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            )
+            self.assertFalse(output.exists())
+            post.assert_not_called()
+
+    def test_csv_native_execute_keeps_csv_as_manifest_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile.json"
+            source = root / "comments.csv"
+            output = root / "stances"
+            configured = payload()
+            configured["data"] = {
+                "local_files": {
+                    "videos_path": str(root / "videos"),
+                    "comments_path": str(source),
+                    "data_root": str(root),
+                },
+                "experimental_input": {
+                    "policy_id": "causal_minimal_v1",
+                    "source": "silver",
+                    "exact_comment_id_dedup": True,
+                    "semantic_filtering": False,
+                }
+            }
+            profile.write_text(json.dumps(configured), encoding="utf-8")
+            source.write_text(
+                "video_id,comment_id,text,author_id,published_at,is_reply,reply_to_comment_id\n"
+                "v,c1,Estoy de acuerdo,a1,2026-04-20T14:00:00Z,false,\n",
+                encoding="utf-8",
+            )
+            http = Mock(status_code=200, headers={}, json=Mock(return_value={
+                "choices": [{"message": {"content": '{"status":"CLASSIFIED","stance":4}'}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            }))
+            with patch.dict("os.environ", {"OPENAI_API_KEY": "test-only-secret"}), patch(
+                "youtube_pipeline.stance_classifier.requests.post", return_value=http,
+            ), contextlib.redirect_stdout(io.StringIO()):
+                main([
+                    "--config", str(profile),
+                    "--comments-path", str(source),
+                    "--execute",
+                    "--output-root", str(output),
+                    "--run-id", "d1_c1_stance",
+                ])
+
+            manifest = json.loads((output / "classifier_manifest.json").read_text())
+            self.assertEqual(manifest["classifier_run_id"], "d1_c1_stance")
+            self.assertEqual(manifest["input_ref"], str(source.absolute()))
+            self.assertEqual(
+                manifest["input_source_sha256"],
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(manifest["input_policy_id"], "causal_minimal_v1")
+            self.assertNotEqual(manifest["input_ref"], str(output / "comment_stances.jsonl"))
+            self.assertEqual(http.json.call_count, 1)
 
 
 if __name__ == "__main__":

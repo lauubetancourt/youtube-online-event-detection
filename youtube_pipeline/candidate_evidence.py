@@ -21,6 +21,7 @@ from youtube_pipeline.experimental_input import (
     prepare_causal_minimal_batch,
     read_input_table,
 )
+from youtube_pipeline.storage import canonicalize_comment_event_time
 from youtube_pipeline.rag_sidecars import build_context_units, build_event_thread_map
 
 
@@ -767,7 +768,7 @@ def build_candidate_evidence(
     if not cutoffs:
         raise ValueError("At least one candidate or current cutoff is required.")
     source_cutoff = max(cutoffs)
-    source = read_input_table(config.source_path)
+    source = canonicalize_comment_event_time(read_input_table(config.source_path))
     prepared = prepare_causal_minimal_batch(
         source,
         ExperimentalInputPolicyConfig(),

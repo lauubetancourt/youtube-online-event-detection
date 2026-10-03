@@ -40,6 +40,7 @@ from youtube_pipeline.stance_classifier_io import (
     STANCE_ARTIFACT,
     run_configured_comment_stance_classification,
 )
+from youtube_pipeline.storage import canonicalize_comment_event_time
 
 
 DISTRIBUTION_ARTIFACT = "opinion_distributions.jsonl"
@@ -135,6 +136,7 @@ def prepare_polarization_runtime(config: RunConfig) -> PolarizationRuntimePlan:
     input_policy_manifest = None
     policy_records = None
     if config.data is not None and config.data.experimental_input is not None:
+        comments = canonicalize_comment_event_time(comments)
         prepared = prepare_causal_minimal_batch(
             comments,
             config.data.experimental_input,
