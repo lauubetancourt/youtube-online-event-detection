@@ -23,6 +23,17 @@ from youtube_pipeline.candidate_evidence import (
     NO_EVIDENCE_FOUND,
     RAG_COMPATIBILITY_DIR,
 )
+from youtube_pipeline.external_publication_time import (
+    AFTER_REFERENCE,
+    AT_REFERENCE,
+    BEFORE_REFERENCE,
+    CAUSALLY_AVAILABLE,
+    FUTURE_RELATIVE_TO_CUTOFF,
+    SAME_DAY_TIME_UNKNOWN,
+    external_publication_time_from_record,
+    temporal_relation_to_cutoff,
+    temporal_relation_to_reference,
+)
 from youtube_pipeline.g2_gate import (
     G2_EXECUTED,
     G2_FAILED,
@@ -62,10 +73,11 @@ from youtube_pipeline.rag_generation_g2_hierarchical import (
     RagG2HierarchicalConfig,
     run_rag_g2_hierarchical_from_config,
 )
+from youtube_pipeline.validation_status import normalize_validation_status
 
 
 CANDIDATE_RAG_INTEGRATION_V1 = "candidate_rag_integration_v1"
-CANDIDATE_RAG_ARTIFACT_VERSION = "candidate_rag_validation_v1"
+CANDIDATE_RAG_ARTIFACT_VERSION = "candidate_rag_validation_v2"
 EXTERNAL_CAUSAL_POLICY_V1 = "published_strictly_before_evidence_cutoff_v1"
 
 VALIDATED = "VALIDATED"
@@ -469,12 +481,13 @@ def _token_usage(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _external_future_leaks(records: list[dict[str, Any]], cutoff: datetime) -> int:
-    leaks = 0
-    for record in records:
-        published = pd.to_datetime(record.get("published_at"), utc=True, errors="coerce")
-        if pd.isna(published) or published.to_pydatetime() >= cutoff:
-            leaks += 1
-    return leaks
+    return sum(
+        temporal_relation_to_cutoff(
+            external_publication_time_from_record(record), cutoff
+        )
+        != CAUSALLY_AVAILABLE
+        for record in records
+    )
 
 
 def _external_timing_records(
@@ -488,8 +501,15 @@ def _external_timing_records(
     for record in records:
         enriched = dict(record)
         raw = record.get("published_at")
-        published = pd.to_datetime(raw, utc=True, errors="coerce")
+        publication_time = external_publication_time_from_record(record)
+        reference_relation = temporal_relation_to_reference(
+            publication_time, reference
+        )
+        cutoff_relation = temporal_relation_to_cutoff(
+            publication_time, evidence_cutoff
+        )
         enriched.update({
+            **publication_time.to_mapping(),
             "candidate_reference_time_utc": reference.isoformat(),
             "candidate_created_at_cutoff_utc": (
                 candidate.created_at_cutoff_utc.isoformat()
@@ -498,19 +518,23 @@ def _external_timing_records(
             "external_source_published_at": raw,
             "external_lag_seconds": None,
             "external_temporal_relation": "UNKNOWN",
+            "temporal_relation_to_cutoff": cutoff_relation,
         })
-        if not pd.isna(published):
-            published_at = published.to_pydatetime()
+        if publication_time.timestamp_utc is not None:
+            published_at = publication_time.timestamp_utc
             enriched["external_lag_seconds"] = (
                 published_at - reference
             ).total_seconds()
+        if reference_relation == BEFORE_REFERENCE:
+            enriched["external_temporal_relation"] = "PRE_CANDIDATE"
+        elif cutoff_relation == FUTURE_RELATIVE_TO_CUTOFF:
+            enriched["external_temporal_relation"] = "FUTURE_RELATIVE_TO_CUTOFF"
+        elif reference_relation in {AT_REFERENCE, AFTER_REFERENCE}:
             enriched["external_temporal_relation"] = (
-                "PRE_CANDIDATE"
-                if published_at < reference
-                else "POST_CANDIDATE_CAUSALLY_AVAILABLE"
-                if published_at < evidence_cutoff
-                else "FUTURE_RELATIVE_TO_CUTOFF"
+                "POST_CANDIDATE_CAUSALLY_AVAILABLE"
             )
+        elif reference_relation == SAME_DAY_TIME_UNKNOWN:
+            enriched["external_temporal_relation"] = "UNKNOWN_SAME_DAY_DATE_ONLY"
         output.append(enriched)
     return output
 
@@ -540,18 +564,21 @@ def _final_synthesis(
 ) -> dict[str, Any] | None:
     if g1 is None and g2 is None:
         return None
+    internal_status = normalize_validation_status(
+        g1.get("validation_status") if g1 is not None else None,
+        allow_none=True,
+    )
+    external_status = normalize_validation_status(
+        g2.get("overall_validation_status") if g2 is not None else None,
+        allow_none=True,
+    )
     return {
-        "policy": "preserve_existing_g1_and_hierarchical_g2_v1",
+        "policy": "separate_internal_validation_and_external_corroboration_v2",
         "internal_validation_status": (
-            g1.get("validation_status") if g1 is not None else None
+            internal_status
         ),
         "external_validation_status": (
-            g2.get("overall_validation_status") if g2 is not None else None
-        ),
-        "validation_status": (
-            g2.get("overall_validation_status")
-            if g2 is not None
-            else g1.get("validation_status") if g1 is not None else None
+            external_status
         ),
         "event_interpretation": (
             g2.get("overall_interpretation")

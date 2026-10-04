@@ -12,9 +12,16 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from youtube_pipeline.validation_status import (
+    CONFIRMED,
+    INSUFFICIENT_EVIDENCE,
+    NOT_CONFIRMED,
+    VALIDATION_STATUS_VALUES,
+)
 
-RAG_G1_ARTIFACT_VERSION = "rag_generation_g1_v1"
-PROMPT_VERSION = "rag_validation_prompt_v0.1"
+
+RAG_G1_ARTIFACT_VERSION = "rag_generation_g1_v2"
+PROMPT_VERSION = "rag_validation_prompt_v0.2"
 
 RAG_VALIDATION_INPUTS_FILE = "rag_validation_inputs.jsonl"
 RAG_CONTEXT_PAYLOADS_FILE = "rag_context_payloads.jsonl"
@@ -27,13 +34,6 @@ RAG_RAW_MODEL_RESPONSES_FILE = "rag_raw_model_responses.jsonl"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 OPENAI_MODEL_URL = "https://api.openai.com/v1/models/{model}"
 
-VALIDATION_STATUS_VALUES = {
-    "confirmed",
-    "partially_confirmed",
-    "not_confirmed",
-    "ambiguous",
-    "insufficient_evidence",
-}
 EVENT_INTERPRETATION_VALUES = {
     "internal_community_reaction",
     "possible_external_event",
@@ -311,25 +311,26 @@ def _compact_event_payload(
         ]
         if key in validation_input
     }
+    compact_units = []
+    for unit in context_payload.get("selected_context_units", []):
+        # Comment text is carried exactly once in used_context_comments.  Units
+        # retain their IDs, membership and temporal/thread relationships.
+        compact_units.append(
+            {key: value for key, value in unit.items() if key != "context_text"}
+        )
     return {
         "event_metadata": event_metadata,
         "temporal_policy": {
             "alert_evidence_comments": "window_start_utc <= event_time_utc <= trigger_time_utc",
             "validation_context_comments": "window_start_utc <= event_time_utc <= window_end_utc",
             "post_trigger_context_used": context_payload.get("post_trigger_context_used"),
-            "post_trigger_comment_ids": context_payload.get("post_trigger_comment_ids", []),
             "confirmed_scope": (
                 "In G-1, confirmed means internally confirmed as a conversational "
                 "pattern in YouTube evidence, not confirmed as an external public fact."
             ),
         },
-        "selected_context_units": context_payload.get("selected_context_units", []),
+        "selected_context_units": compact_units,
         "used_context_comments": context_payload.get("used_context_comments", []),
-        "used_context_comment_ids": [
-            comment.get("comment_id")
-            for comment in context_payload.get("used_context_comments", [])
-            if comment.get("comment_id")
-        ],
         "allowed_validation_status": sorted(VALIDATION_STATUS_VALUES),
         "allowed_event_interpretation": sorted(EVENT_INTERPRETATION_VALUES),
     }
@@ -347,18 +348,21 @@ def _prompt_text(compact_payload: dict[str, Any]) -> tuple[str, str]:
         "externa. No menciones noticias ni fuentes externas. No modifiques la decision "
         "original del detector. No presentes comentarios posteriores al trigger como "
         "causa de la alerta.\n\n"
-        "Definiciones para G-1:\n"
-        "- confirmed significa confirmado como patron conversacional interno, no como "
-        "hecho externo.\n"
+        "Estados permitidos para G-1:\n"
+        "- CONFIRMED: hay evidencia interna suficiente para sostener un patron "
+        "conversacional coherente.\n"
+        "- INSUFFICIENT_EVIDENCE: la evidencia interna no permite decidir con "
+        "suficiente sustento, incluida evidencia parcial o ambigua.\n"
+        "- NOT_CONFIRMED: hay evidencia interna suficiente para evaluar, pero no "
+        "respalda el patron propuesto.\n"
         "- possible_external_event es solo una hipotesis interpretativa, no una "
         "confirmacion factual externa.\n\n"
         "Debes citar comment_id cuando uses comentarios y context_unit_id cuando uses "
         "unidades de contexto. Separa evidencia observada de inferencia, declara "
         "incertidumbre, reporta limitaciones y respeta los roles temporales.\n\n"
-        "Regla de consistencia: si validation_status es confirmed o "
-        "partially_confirmed, debe existir al menos una cita en cited_comment_ids o "
-        "cited_context_unit_ids. Si no hay citas suficientes, usa insufficient_evidence "
-        "o ambiguous.\n\n"
+        "Regla de consistencia: CONFIRMED y NOT_CONFIRMED requieren al menos una "
+        "cita interna valida. Si no hay evidencia suficiente para decidir, usa "
+        "INSUFFICIENT_EVIDENCE.\n\n"
         "Devuelve solo JSON valido que cumpla el esquema."
     )
     user_prompt = (
@@ -373,8 +377,6 @@ def _response_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "validation_id": {"type": "string"},
-            "event_id": {"type": "string"},
             "validation_status": {
                 "type": "string",
                 "enum": sorted(VALIDATION_STATUS_VALUES),
@@ -398,22 +400,12 @@ def _response_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string"},
             },
-            "used_context_comment_ids": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "post_trigger_context_used": {"type": "boolean"},
             "limitations": {
                 "type": "array",
                 "items": {"type": "string"},
             },
-            "model_name": {"type": "string"},
-            "prompt_version": {"type": "string"},
-            "validated_at_utc": {"type": "string"},
         },
         "required": [
-            "validation_id",
-            "event_id",
             "validation_status",
             "event_interpretation",
             "confidence_label",
@@ -422,12 +414,7 @@ def _response_schema() -> dict[str, Any]:
             "reasoning_summary",
             "cited_comment_ids",
             "cited_context_unit_ids",
-            "used_context_comment_ids",
-            "post_trigger_context_used",
             "limitations",
-            "model_name",
-            "prompt_version",
-            "validated_at_utc",
         ],
     }
 
@@ -552,15 +539,10 @@ def _schema_errors(report: dict[str, Any]) -> list[str]:
     for field in [
         "cited_comment_ids",
         "cited_context_unit_ids",
-        "used_context_comment_ids",
         "limitations",
     ]:
         if field in report and not isinstance(report[field], list):
             errors.append(f"{field}_is_not_array")
-    if "post_trigger_context_used" in report and not isinstance(
-        report["post_trigger_context_used"], bool
-    ):
-        errors.append("post_trigger_context_used_is_not_boolean")
     return errors
 
 
@@ -581,47 +563,37 @@ def _citation_verification(
     }
     cited_comment_ids = set(report.get("cited_comment_ids") or [])
     cited_context_unit_ids = set(report.get("cited_context_unit_ids") or [])
-    model_used_comment_ids = set(report.get("used_context_comment_ids") or [])
 
     invalid_comment_ids = sorted(cited_comment_ids.difference(allowed_comment_ids))
     invalid_context_unit_ids = sorted(
         cited_context_unit_ids.difference(allowed_context_unit_ids)
     )
-    invalid_used_comment_ids = sorted(
-        model_used_comment_ids.difference(allowed_comment_ids)
-    )
     status_requires_citation = report.get("validation_status") in {
-        "confirmed",
-        "partially_confirmed",
+        CONFIRMED,
+        NOT_CONFIRMED,
     }
     has_valid_citation = bool(
         cited_comment_ids.intersection(allowed_comment_ids)
         or cited_context_unit_ids.intersection(allowed_context_unit_ids)
     )
     payload_post_trigger = bool(context_payload.get("post_trigger_context_used"))
-    report_post_trigger = bool(report.get("post_trigger_context_used"))
     errors: list[str] = []
     if invalid_comment_ids:
         errors.append("invalid_cited_comment_ids")
     if invalid_context_unit_ids:
         errors.append("invalid_cited_context_unit_ids")
-    if invalid_used_comment_ids:
-        errors.append("invalid_used_context_comment_ids")
     if status_requires_citation and not has_valid_citation:
         errors.append("status_requires_at_least_one_valid_citation")
-    if payload_post_trigger != report_post_trigger:
-        errors.append("post_trigger_context_used_mismatch")
-
     return {
         "valid": not errors,
         "errors": errors,
         "invalid_cited_comment_ids": invalid_comment_ids,
         "invalid_cited_context_unit_ids": invalid_context_unit_ids,
-        "invalid_used_context_comment_ids": invalid_used_comment_ids,
+        "invalid_used_context_comment_ids": [],
         "status_requires_citation": status_requires_citation,
         "has_valid_citation": has_valid_citation,
         "payload_post_trigger_context_used": payload_post_trigger,
-        "report_post_trigger_context_used": report_post_trigger,
+        "report_post_trigger_context_used": payload_post_trigger,
         "allowed_comment_count": len(allowed_comment_ids),
         "allowed_context_unit_count": len(allowed_context_unit_ids),
     }
@@ -637,6 +609,8 @@ def _finalize_report(
     citation_verification: dict[str, Any],
     attempt_count: int,
     raw_response_id: str | None,
+    used_context_comment_ids: list[str],
+    post_trigger_context_used: bool,
 ) -> dict[str, Any]:
     report = dict(model_report)
     report["validation_id"] = validation_id
@@ -644,6 +618,8 @@ def _finalize_report(
     report["model_name"] = model
     report["prompt_version"] = PROMPT_VERSION
     report["validated_at_utc"] = validated_at_utc
+    report["used_context_comment_ids"] = used_context_comment_ids
+    report["post_trigger_context_used"] = post_trigger_context_used
     report["citation_verification"] = citation_verification
     report["attempt_count"] = attempt_count
     report["raw_response_id"] = raw_response_id
@@ -666,7 +642,7 @@ def _error_report(
     return {
         "validation_id": validation_id,
         "event_id": event_id,
-        "validation_status": "insufficient_evidence",
+        "validation_status": INSUFFICIENT_EVIDENCE,
         "event_interpretation": "unclear",
         "confidence_label": "low",
         "claim_summary": "No se obtuvo una validacion generativa estructurada valida.",
@@ -724,7 +700,11 @@ def run_rag_g1_validation_from_config(config: RagG1Config) -> dict[str, Any]:
     prompt_hash = hashlib.sha256(
         (prompt_developer + "\n\n" + prompt_user).encode("utf-8")
     ).hexdigest()
-    used_context_comment_ids = compact_payload["used_context_comment_ids"]
+    used_context_comment_ids = [
+        comment.get("comment_id")
+        for comment in context_payload.get("used_context_comments", [])
+        if comment.get("comment_id")
+    ]
     raw_records: list[dict[str, Any]] = []
     reports: list[dict[str, Any]] = []
     manifest_errors: list[dict[str, Any]] = []
@@ -871,6 +851,10 @@ def run_rag_g1_validation_from_config(config: RagG1Config) -> dict[str, Any]:
                             citation_verification=citation_verification,
                             attempt_count=attempt,
                             raw_response_id=raw_id,
+                            used_context_comment_ids=used_context_comment_ids,
+                            post_trigger_context_used=bool(
+                                context_payload.get("post_trigger_context_used")
+                            ),
                         )
                     )
                     break
@@ -892,6 +876,10 @@ def run_rag_g1_validation_from_config(config: RagG1Config) -> dict[str, Any]:
                             citation_verification=citation_verification,
                             attempt_count=attempt,
                             raw_response_id=raw_id,
+                            used_context_comment_ids=used_context_comment_ids,
+                            post_trigger_context_used=bool(
+                                context_payload.get("post_trigger_context_used")
+                            ),
                         )
                     )
                     break

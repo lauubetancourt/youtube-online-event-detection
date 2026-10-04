@@ -32,7 +32,7 @@ class G2GateContractTests(unittest.TestCase):
     def test_non_off_policy_uses_only_explicit_schema_statuses(self) -> None:
         config = G2GatePolicyConfig(
             mode=PERMISSIVE,
-            run_g2_for_g1_statuses=("confirmed", "partially_confirmed"),
+            run_g2_for_g1_statuses=("confirmed",),
             parameter_status="TEST_ONLY",
         )
         run = decide_g2(
@@ -55,7 +55,7 @@ class G2GateContractTests(unittest.TestCase):
             config.mode = PERMISSIVE  # type: ignore[misc]
         with self.assertRaisesRegex(ValueError, "explicit"):
             G2GatePolicyConfig(mode=PERMISSIVE)
-        with self.assertRaisesRegex(ValueError, "Unknown G-1"):
+        with self.assertRaisesRegex(ValueError, "Unknown validation"):
             G2GatePolicyConfig(
                 mode=PERMISSIVE,
                 run_g2_for_g1_statuses=("invented",),

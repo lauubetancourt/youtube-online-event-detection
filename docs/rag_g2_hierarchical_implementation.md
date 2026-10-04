@@ -114,7 +114,10 @@ del pipeline base.
 
 ## Politica de claims
 
-`claim_verification_query` es opcional.
+> Contract update: new hierarchical artifacts use the three-state validation
+> contract and metadata-first query generation documented in
+> `docs/g1_g2_validation_semantics.md`. Legacy artifacts described below remain
+> readable, but their additional query/status fields are not generated anew.
 
 Reglas:
 
@@ -174,7 +177,8 @@ La implementacion verifica:
 - que evidencia externa citada pertenezca al mismo `event_id + video_id`;
 - que `external_event` requiera cita externa valida;
 - que un video sin evidencia externa no se clasifique como `external_event`;
-- que `claim_verification_query` permanezca registrada pero no ejecutada.
+- legacy `claim_verification_query` fields are tolerated when reading historical
+  artifacts, but new runs neither request nor persist them.
 
 ## Pruebas sin red
 

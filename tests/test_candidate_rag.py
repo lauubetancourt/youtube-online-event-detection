@@ -422,8 +422,12 @@ class CandidateRagTests(unittest.TestCase):
             self.assertIsNotNone(result["g1_result"])
             self.assertIsNone(result["g2_result"])
             self.assertEqual(
-                result["final_synthesis"]["validation_status"], "confirmed"
+                result["final_synthesis"]["internal_validation_status"], "CONFIRMED"
             )
+            self.assertIsNone(
+                result["final_synthesis"]["external_validation_status"]
+            )
+            self.assertNotIn("validation_status", result["final_synthesis"])
 
     def test_g2_failure_is_distinct_from_gate_skip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -539,6 +543,9 @@ class CandidateRagTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept], ["past", "prior-day"])
         self.assertEqual(audit["excluded_at_or_after_cutoff"], 2)
         self.assertEqual(audit["excluded_unknown_published_at"], 2)
+        self.assertEqual(audit["same_day_time_unknown"], 1)
+        self.assertEqual(kept[0]["publication_time_precision"], "EXACT")
+        self.assertEqual(kept[1]["publication_time_precision"], "DATE_ONLY")
         legacy, legacy_audit = _filter_external_evidence_by_cutoff(records, None)
         self.assertEqual(legacy, records)
         self.assertEqual(legacy_audit["kept"], 6)

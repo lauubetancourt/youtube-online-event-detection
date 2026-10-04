@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from youtube_pipeline.rag_generation_g1 import VALIDATION_STATUS_VALUES
+from youtube_pipeline.validation_status import normalize_validation_status
 
 
 G1_GATE_V1 = "g1_gate_v1"
@@ -51,15 +51,13 @@ class G2GatePolicyConfig:
             raise ValueError(f"Unsupported G-2 gate mode {self.mode!r}.")
         if not isinstance(self.run_g2_for_g1_statuses, tuple):
             raise TypeError("run_g2_for_g1_statuses must be a tuple.")
-        invalid = sorted(
-            set(self.run_g2_for_g1_statuses) - VALIDATION_STATUS_VALUES
+        normalized_statuses = tuple(
+            normalize_validation_status(status)
+            for status in self.run_g2_for_g1_statuses
         )
-        if invalid:
-            raise ValueError(f"Unknown G-1 validation statuses: {invalid}")
-        if len(set(self.run_g2_for_g1_statuses)) != len(
-            self.run_g2_for_g1_statuses
-        ):
+        if len(set(normalized_statuses)) != len(normalized_statuses):
             raise ValueError("run_g2_for_g1_statuses must not contain duplicates.")
+        object.__setattr__(self, "run_g2_for_g1_statuses", normalized_statuses)
         if self.mode == OFF and self.run_g2_for_g1_statuses:
             raise ValueError("OFF mode must not define eligible G-1 statuses.")
         if self.mode != OFF and not self.run_g2_for_g1_statuses:
@@ -116,7 +114,7 @@ def decide_g2(
     if not isinstance(config, G2GatePolicyConfig):
         raise TypeError("config must be G2GatePolicyConfig.")
     status = (
-        str(g1_result.get("validation_status"))
+        normalize_validation_status(g1_result.get("validation_status"))
         if isinstance(g1_result, Mapping)
         and g1_result.get("validation_status") is not None
         else None

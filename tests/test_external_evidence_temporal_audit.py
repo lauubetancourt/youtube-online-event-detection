@@ -192,7 +192,7 @@ class ExternalEvidenceTemporalAuditTests(unittest.TestCase):
             self.assertEqual(rows["same-day"]["relative_to_cutoff"], "UNKNOWN_SAME_DAY_DATE_ONLY")
             self.assertEqual(rows["same-day"]["external_lag_seconds"], "")
 
-    def test_exact_cutoff_is_causally_available_for_audit_metric(self) -> None:
+    def test_exact_cutoff_respects_strictly_before_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             candidate = _candidate_dir(
@@ -215,7 +215,8 @@ class ExternalEvidenceTemporalAuditTests(unittest.TestCase):
                 )
             )
             row = _read_csv(output / SOURCE_AUDIT_FILE)[0]
-            self.assertEqual(row["relative_to_cutoff"], "CAUSALLY_AVAILABLE")
+            self.assertEqual(row["relative_to_cutoff"], "FUTURE_RELATIVE_TO_CUTOFF")
+            self.assertEqual(row["publication_time_precision"], "EXACT")
 
     def test_legacy_adapter_does_not_invent_evidence_cutoff(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

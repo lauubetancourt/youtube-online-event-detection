@@ -12,9 +12,24 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from youtube_pipeline.external_publication_time import (
+    AFTER_REFERENCE,
+    AT_REFERENCE,
+    BEFORE_REFERENCE,
+    CAUSALLY_AVAILABLE,
+    DATE_ONLY,
+    EXACT,
+    FUTURE_RELATIVE_TO_CUTOFF,
+    SAME_DAY_TIME_UNKNOWN,
+    UNKNOWN,
+    external_publication_time_from_record,
+    temporal_relation_to_cutoff,
+    temporal_relation_to_reference,
+)
 
 
 AUDIT_POLICY_ID = "external_evidence_temporal_audit_v1"
@@ -22,10 +37,7 @@ SOURCE_AUDIT_FILE = "external_evidence_temporal_audit.csv"
 CANDIDATE_SUMMARY_FILE = "external_evidence_candidate_summary.csv"
 AUDIT_MANIFEST_FILE = "external_evidence_temporal_audit_manifest.json"
 
-CAUSALLY_AVAILABLE = "CAUSALLY_AVAILABLE"
-FUTURE_RELATIVE_TO_CUTOFF = "FUTURE_RELATIVE_TO_CUTOFF"
 PUBLICATION_TIME_UNKNOWN = "PUBLICATION_TIME_UNKNOWN"
-DATE_ONLY = "DATE_ONLY"
 KNOWN_TIMESTAMP = "KNOWN_TIMESTAMP"
 
 
@@ -84,24 +96,6 @@ def _utc(value: object) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     return parsed.astimezone(timezone.utc)
-
-
-def _publication_time(value: object) -> tuple[str, datetime | date | None]:
-    if not isinstance(value, str) or not value.strip():
-        return PUBLICATION_TIME_UNKNOWN, None
-    raw = value.strip()
-    has_clock = "T" in raw or ":" in raw
-    if has_clock:
-        parsed = _utc(raw)
-        if parsed is not None:
-            return KNOWN_TIMESTAMP, parsed
-        return PUBLICATION_TIME_UNKNOWN, None
-    for pattern in ("%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return DATE_ONLY, datetime.strptime(raw, pattern).date()
-        except ValueError:
-            pass
-    return PUBLICATION_TIME_UNKNOWN, None
 
 
 def _source_id(record: Mapping[str, Any]) -> str:
@@ -285,43 +279,40 @@ def _audit_source(
     raw_publication = source.get("external_source_published_at")
     if raw_publication is None:
         raw_publication = source.get("published_at")
-    publication_status, publication = _publication_time(raw_publication)
+    publication = external_publication_time_from_record(source)
+    publication_status = {
+        EXACT: KNOWN_TIMESTAMP,
+        DATE_ONLY: DATE_ONLY,
+        UNKNOWN: PUBLICATION_TIME_UNKNOWN,
+    }[publication.precision]
     lag: float | None = None
     relative_candidate = "UNKNOWN"
     relative_cutoff = "UNKNOWN"
-    if isinstance(publication, datetime):
-        if candidate_reference is not None:
-            lag = (publication - candidate_reference).total_seconds()
-            relative_candidate = (
-                "PRE_CANDIDATE" if publication < candidate_reference else "POST_CANDIDATE"
-            )
-        if evidence_cutoff is not None:
-            relative_cutoff = (
-                CAUSALLY_AVAILABLE
-                if publication <= evidence_cutoff
-                else FUTURE_RELATIVE_TO_CUTOFF
-            )
-        else:
-            relative_cutoff = "UNKNOWN_MISSING_EVIDENCE_CUTOFF"
-    elif isinstance(publication, date):
-        if candidate_reference is not None:
-            if publication < candidate_reference.date():
-                relative_candidate = "PRE_CANDIDATE"
-            elif publication > candidate_reference.date():
-                relative_candidate = "POST_CANDIDATE"
-            else:
-                relative_candidate = "UNKNOWN_SAME_DAY_DATE_ONLY"
-        if evidence_cutoff is None:
-            relative_cutoff = "UNKNOWN_MISSING_EVIDENCE_CUTOFF"
-        elif publication < evidence_cutoff.date():
-            relative_cutoff = CAUSALLY_AVAILABLE
-        elif publication > evidence_cutoff.date():
-            relative_cutoff = FUTURE_RELATIVE_TO_CUTOFF
-        else:
-            relative_cutoff = "UNKNOWN_SAME_DAY_DATE_ONLY"
-    else:
+    if publication.timestamp_utc is not None and candidate_reference is not None:
+        lag = (publication.timestamp_utc - candidate_reference).total_seconds()
+    if candidate_reference is not None:
+        relation = temporal_relation_to_reference(publication, candidate_reference)
+        relative_candidate = {
+            BEFORE_REFERENCE: "PRE_CANDIDATE",
+            AT_REFERENCE: "POST_CANDIDATE",
+            AFTER_REFERENCE: "POST_CANDIDATE",
+            SAME_DAY_TIME_UNKNOWN: "UNKNOWN_SAME_DAY_DATE_ONLY",
+        }.get(relation, PUBLICATION_TIME_UNKNOWN)
+    elif publication.precision == UNKNOWN:
         relative_candidate = PUBLICATION_TIME_UNKNOWN
+    if evidence_cutoff is not None:
+        relation = temporal_relation_to_cutoff(publication, evidence_cutoff)
+        relative_cutoff = (
+            "UNKNOWN_SAME_DAY_DATE_ONLY"
+            if relation == SAME_DAY_TIME_UNKNOWN
+            else PUBLICATION_TIME_UNKNOWN
+            if publication.precision == UNKNOWN
+            else relation
+        )
+    elif publication.precision == UNKNOWN:
         relative_cutoff = PUBLICATION_TIME_UNKNOWN
+    else:
+        relative_cutoff = "UNKNOWN_MISSING_EVIDENCE_CUTOFF"
     return {
         "candidate_id": candidate["candidate_id"],
         "candidate_type": candidate.get("candidate_type"),
@@ -335,6 +326,7 @@ def _audit_source(
         "external_source_url": source.get("link") or source.get("url"),
         "external_source_published_at": raw_publication,
         "publication_time_status": publication_status,
+        **publication.to_mapping(),
         "external_lag_seconds": lag,
         "relative_to_candidate": relative_candidate,
         "relative_to_cutoff": relative_cutoff,
@@ -454,6 +446,10 @@ def run_external_evidence_temporal_audit(
         "external_source_url",
         "external_source_published_at",
         "publication_time_status",
+        "raw_publication_date",
+        "parsed_publication_time_utc",
+        "publication_date",
+        "publication_time_precision",
         "external_lag_seconds",
         "relative_to_candidate",
         "relative_to_cutoff",

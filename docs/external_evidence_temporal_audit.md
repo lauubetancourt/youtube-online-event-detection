@@ -33,6 +33,16 @@ candidate_reference_time` only for timezone-aware timestamps and classifies
 availability relative to the persisted cutoff. Calendar-date-only values retain
 `DATE_ONLY`; same-day ordering and second-level lag stay unknown.
 
+External publication metadata now passes through the shared deterministic parser
+in `external_publication_time.py`. Serper News `result.date` remains the source
+authority and its raw value is preserved as `raw_publication_date`. Supported
+branches are explicit: `DD/MM/YYYY` and `YYYY-MM-DD` produce `DATE_ONLY`, while
+ISO-8601 datetimes with `Z` or an explicit offset produce `EXACT`; missing,
+relative, malformed, and timezone-naive values produce `UNKNOWN`. New G-2
+artifacts also persist `parsed_publication_time_utc`, `publication_date`,
+`publication_time_precision`, and the cutoff relation. The audit consumes those
+persisted fields directly and only parses the raw field for legacy artifacts.
+
 ## Retained empirical sample
 
 The reusable local sample is the legacy hierarchical G-2 batch at
