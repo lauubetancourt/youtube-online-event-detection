@@ -40,3 +40,5 @@ htmlcov/
 # Generated graph formats
 *.gephi
 *.graphml
+
+.agents

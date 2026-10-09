@@ -100,6 +100,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "replies_with_parent": plan.replies_with_parent,
             "missing_parents": plan.missing_parents,
             "expected_model_calls": plan.expected_model_calls,
+            **plan.video_scope.to_manifest(),
         }
     else:
         assert args.input_jsonl is not None

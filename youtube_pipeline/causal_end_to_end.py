@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +28,15 @@ from youtube_pipeline.association_candidates import (
     AssociatedEventCandidate,
 )
 from youtube_pipeline.candidate_evidence import (
+    CANDIDATE_EVIDENCE_MANIFEST_FILE,
+    CANDIDATE_EVIDENCE_PACKAGES_FILE,
+    RAG_COMPATIBILITY_DIR,
     CandidateEvidenceArtifacts,
     build_candidate_evidence,
     derive_candidate_evidence_scope,
 )
 from youtube_pipeline.candidate_rag import (
+    CANDIDATE_RAG_MANIFEST_FILE,
     CANDIDATE_VALIDATION_RESULTS_FILE,
     CandidateRagArtifacts,
     run_candidate_rag_validation,
@@ -65,6 +70,7 @@ from youtube_pipeline.experimental_input import (
 from youtube_pipeline.polarization_signal_composition import (
     create_configured_polarization_signal,
 )
+from youtube_pipeline.polarization_runtime_config import resolve_video_scope
 from youtube_pipeline.polarization_signals import PolarizationTemporalTick
 from youtube_pipeline.signal_observations import SignalObservation, to_json_mapping
 from youtube_pipeline.storage import canonicalize_comment_event_time
@@ -80,6 +86,7 @@ DETECTION_RESULTS = "detection_results.jsonl"
 DETECTION_ALERTS = "detection_alerts.jsonl"
 VALIDATION_RESULTS = "candidate_validation_results.jsonl"
 INPUT_POLICY_MANIFEST = "causal_input_manifest.json"
+PRECOMPUTED_LABELS = "PRECOMPUTED_LABELS"
 
 
 DetectorFactory = Callable[[str, Any], NumericObservationDetector]
@@ -122,9 +129,14 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
 
 
-def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> str:
+def _write_jsonl(
+    path: Path,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    overwrite: bool = False,
+) -> str:
     digest = hashlib.sha256()
-    with path.open("x", encoding="utf-8") as target:
+    with path.open("w" if overwrite else "x", encoding="utf-8") as target:
         for row in rows:
             encoded = json.dumps(
                 _json_safe(row), ensure_ascii=False, sort_keys=True, allow_nan=False
@@ -134,11 +146,175 @@ def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> str:
     return digest.hexdigest()
 
 
+def _write_or_verify_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    resume: bool,
+) -> None:
+    expected = _json_safe(payload)
+    if resume and path.exists():
+        if _read_json(path) != expected:
+            raise ValueError(
+                f"Resume refused because persisted artifact differs: {path}."
+            )
+        return
+    _write_json(path, payload)
+
+
+def _write_or_verify_jsonl(
+    path: Path,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    resume: bool,
+) -> str:
+    if not resume or not path.exists():
+        return _write_jsonl(path, rows)
+    expected_digest = hashlib.sha256()
+    for row in rows:
+        encoded = json.dumps(
+            _json_safe(row), ensure_ascii=False, sort_keys=True, allow_nan=False
+        ) + "\n"
+        expected_digest.update(encoded.encode("utf-8"))
+    actual_digest = source_sha256(path)
+    if actual_digest != expected_digest.hexdigest():
+        raise ValueError(
+            f"Resume refused because persisted artifact differs: {path}."
+        )
+    return actual_digest
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Expected JSON object in {path}.")
     return payload
+
+
+def _load_resumable_evidence(
+    *,
+    root: Path,
+    candidates: list[AssociatedEventCandidate],
+    run_id: str,
+    source_hash: str,
+    evidence_config: Any,
+) -> CandidateEvidenceArtifacts:
+    manifest_path = root / CANDIDATE_EVIDENCE_MANIFEST_FILE
+    package_path = root / CANDIDATE_EVIDENCE_PACKAGES_FILE
+    compatibility_dir = root / RAG_COMPATIBILITY_DIR
+    if not manifest_path.is_file() or not package_path.is_file():
+        raise ValueError("Persisted candidate evidence is incomplete.")
+    if not compatibility_dir.is_dir() or not any(compatibility_dir.iterdir()):
+        raise ValueError("Persisted RAG compatibility evidence is incomplete.")
+
+    manifest = _read_json(manifest_path)
+    if manifest.get("run_id") != run_id:
+        raise ValueError("Persisted candidate evidence belongs to another run_id.")
+    policy = manifest.get("evidence_policy", {})
+    expected_policy = {
+        "policy_id": evidence_config.policy_id,
+        "mode": evidence_config.mode,
+        "time_anchor": evidence_config.time_anchor,
+        "lookback": evidence_config.lookback,
+        "lookahead": evidence_config.lookahead,
+        "parameter_status": evidence_config.parameter_status,
+    }
+    if any(policy.get(name) != value for name, value in expected_policy.items()):
+        raise ValueError("Persisted candidate evidence policy is incompatible.")
+    if manifest.get("source", {}).get("source_sha256") != source_hash:
+        raise ValueError("Persisted candidate evidence source hash is incompatible.")
+
+    expected_ids = [item.candidate_id for item in candidates]
+    persisted_ids = [
+        item.get("candidate_id")
+        for item in manifest.get("candidate_lineage", [])
+        if isinstance(item, Mapping)
+    ]
+    if persisted_ids != expected_ids:
+        raise ValueError("Persisted candidate evidence lineage is incompatible.")
+
+    artifacts = manifest.get("artifacts", {})
+    artifact_hashes = manifest.get("artifact_hashes", {})
+    for name, filename in artifacts.items():
+        artifact_path = root / str(filename)
+        expected_hash = artifact_hashes.get(f"{name}_sha256")
+        if not artifact_path.is_file() or not expected_hash:
+            raise ValueError(f"Persisted candidate evidence artifact is missing: {name}.")
+        if source_sha256(artifact_path) != expected_hash:
+            raise ValueError(f"Persisted candidate evidence hash mismatch: {name}.")
+
+    counts = manifest.get("counts", {})
+    return CandidateEvidenceArtifacts(
+        output_dir=root,
+        package_path=package_path,
+        manifest_path=manifest_path,
+        rag_compatibility_dir=compatibility_dir,
+        candidate_count=int(counts.get("candidates", 0)),
+        evidence_ready=int(counts.get("evidence_ready", 0)),
+        no_evidence=int(counts.get("no_evidence_found", 0)),
+        blocked=int(counts.get("blocked_missing_video_lineage", 0)),
+        pending=int(counts.get("pending_evidence_horizon", 0)),
+        inventory_rows=int(counts.get("inventory_rows", 0)),
+    )
+
+
+def _load_completed_candidate_rag(
+    *,
+    root: Path,
+    candidate: AssociatedEventCandidate,
+    evidence_manifest_hash: str,
+    retry_errors: bool,
+) -> CandidateRagArtifacts | None:
+    manifest_path = root / CANDIDATE_RAG_MANIFEST_FILE
+    result_path = root / CANDIDATE_VALIDATION_RESULTS_FILE
+    if not manifest_path.is_file() or not result_path.is_file():
+        return None
+    try:
+        manifest = _read_json(manifest_path)
+        result_rows = [
+            json.loads(line)
+            for line in result_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, TypeError, ValueError):
+        return None
+    if len(result_rows) != 1 or not isinstance(result_rows[0], Mapping):
+        return None
+    result = result_rows[0]
+    if manifest.get("candidate_id") != candidate.candidate_id:
+        return None
+    if result.get("candidate_id") != candidate.candidate_id:
+        return None
+    if manifest.get("validation_id") != result.get("validation_id"):
+        return None
+    if manifest.get("run_id") != candidate.run_id:
+        return None
+    if (
+        manifest.get("candidate_lineage", {}).get("candidate_config_hash")
+        != candidate.config_hash
+    ):
+        return None
+    if manifest.get("evidence", {}).get("source_manifest_sha256") != evidence_manifest_hash:
+        return None
+    if int(manifest.get("causality", {}).get("future_leak_count", 0) or 0):
+        return None
+    if int(result.get("internal_future_leak_count", 0) or 0):
+        return None
+    if int(result.get("external_future_leak_count", 0) or 0):
+        return None
+    status = manifest.get("status")
+    g2_status = manifest.get("g2", {}).get("execution_status")
+    if retry_errors and (status == "VALIDATION_ERROR" or g2_status == "FAILED"):
+        return None
+    if not isinstance(status, str) or not status:
+        return None
+    return CandidateRagArtifacts(
+        output_dir=root,
+        validation_results_path=result_path,
+        manifest_path=manifest_path,
+        candidate_id=candidate.candidate_id,
+        status=status,
+    )
 
 
 def _load_stances(path: Path) -> tuple[CommentStance, ...]:
@@ -184,12 +360,28 @@ def _validate_stance_reuse(
     assert config.signals.polarization is not None
     classification_run_id = config.signals.polarization.classification_run_id
     assert config.topic_profile is not None
-    expected = {
-        "classifier_run_id": classification_run_id,
-        "model": classifier.model,
-        "prompt_id": classifier.prompt_id,
-        "prompt_version": classifier.prompt_version,
-    }
+    precomputed_labels = manifest.get("stance_source_type") == PRECOMPUTED_LABELS
+    expected = {"classifier_run_id": classification_run_id}
+    if precomputed_labels:
+        if manifest.get("provider") is not None or manifest.get("model") is not None:
+            raise ValueError(
+                "Precomputed stance manifest must not claim provider/model provenance."
+            )
+        if manifest.get("model_calls") != 0 or manifest.get("openai_calls") != 0:
+            raise ValueError("Precomputed stance manifest requires zero model calls.")
+        for field in ("label_field", "relevance_field", "sentiment_field"):
+            if not isinstance(manifest.get(field), str) or not manifest[field].strip():
+                raise ValueError(f"Precomputed stance manifest requires {field}.")
+        if manifest.get("sentiment_used_for_stance") is not False:
+            raise ValueError(
+                "Precomputed stance manifest must declare sentiment_used_for_stance=false."
+            )
+    else:
+        expected.update({
+            "model": classifier.model,
+            "prompt_id": classifier.prompt_id,
+            "prompt_version": classifier.prompt_version,
+        })
     for name, value in expected.items():
         if manifest.get(name) != value:
             raise ValueError(f"Stance manifest {name} is incompatible with the replay.")
@@ -213,7 +405,14 @@ def _validate_stance_reuse(
     ).hexdigest()
     if manifest.get("context_hash") != context_hash:
         raise ValueError("Stance manifest context hash is incompatible with the replay.")
-    if manifest.get("classification_policy") != {
+    classification_policy = manifest.get("classification_policy")
+    if precomputed_labels:
+        if not isinstance(classification_policy, Mapping) or (
+            classification_policy.get("policy_id") != "precomputed_labels_c_i_v1"
+            or classification_policy.get("sentiment_used_for_stance") is not False
+        ):
+            raise ValueError("Precomputed stance mapping policy is incompatible.")
+    elif classification_policy != {
         "policy_id": "comment_stance_likert5_structured_v1",
         "missing_parent_policy": "SKIPPED",
         "thread_context": "immediate_parent_only",
@@ -374,9 +573,12 @@ def run_causal_end_to_end_replay(
     *,
     base_dir: str | Path,
     execute_rag: bool = False,
+    resume: bool = False,
+    retry_rag_errors: bool = True,
     detector_factory: DetectorFactory | None = None,
     g1_runner: Callable[[Any], dict[str, Any]] | None = None,
     g2_runner: Callable[[Any], dict[str, Any]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> CausalReplayArtifacts:
     """Execute one fixed-config causal replay without calibrating any parameter."""
 
@@ -405,8 +607,16 @@ def run_causal_end_to_end_replay(
         raise ValueError("Polarization temporal bounds must fit inside replay bounds.")
 
     root = Path(replay.output_dir)
-    if root.exists() and any(root.iterdir()):
+    existing_output = root.exists() and any(root.iterdir())
+    resolved_config_mapping = run_config_to_mapping(actual, path_base=base_dir)
+    if existing_output and not resume:
         raise FileExistsError("Causal replay output directory must be empty or absent.")
+    if existing_output and resume:
+        persisted_config_path = root / RESOLVED_CONFIG
+        if not persisted_config_path.is_file():
+            raise ValueError("Resume requires a persisted resolved_config.json.")
+        if _read_json(persisted_config_path) != _json_safe(resolved_config_mapping):
+            raise ValueError("Resume refused because the resolved configuration changed.")
     root.mkdir(parents=True, exist_ok=True)
     source_path = Path(actual.data.local_files.comments_path)
     source = canonicalize_comment_event_time(read_input_table(source_path))
@@ -416,7 +626,11 @@ def run_causal_end_to_end_replay(
         source_path=source_path,
         data_cutoff_utc=replay.end_utc,
     )
-    allowed_videos = set(actual.polarization.runtime.video_ids)
+    video_scope = resolve_video_scope(
+        (record.video_id for record in prepared.records),
+        actual.polarization.runtime.video_ids,
+    )
+    allowed_videos = set(video_scope.effective_video_ids)
     activity_window = pd.to_timedelta(actual.signals.activity.window).to_pytimedelta()
     polarization_window = pd.to_timedelta(temporal.window).to_pytimedelta()
     history_start = min(
@@ -668,30 +882,49 @@ def run_causal_end_to_end_replay(
         "association_manifest": root / "detection_association_manifest.json",
         "candidate_manifest": root / "event_candidate_manifest.json",
     }
-    _write_json(paths["resolved_config"], run_config_to_mapping(actual, path_base=base_dir))
+    _write_or_verify_json(
+        paths["resolved_config"], resolved_config_mapping, resume=resume
+    )
     input_manifest = dict(prepared.manifest)
     input_manifest["selected_video_ids"] = sorted(allowed_videos)
+    input_manifest.update(video_scope.to_manifest())
     input_manifest["selected_records"] = len(records)
-    _write_json(paths["input_policy_manifest"], input_manifest)
+    _write_or_verify_json(paths["input_policy_manifest"], input_manifest, resume=resume)
     artifact_hashes = {
-        "stances": _write_jsonl(
-            paths["stances"], (to_json_mapping(item) for item in released_stances)
+        "stances": _write_or_verify_jsonl(
+            paths["stances"],
+            (to_json_mapping(item) for item in released_stances),
+            resume=resume,
         ),
-        "activity_observations": _write_jsonl(paths["activity_observations"], activity_rows),
-        "opinion_distributions": _write_jsonl(paths["opinion_distributions"], distribution_rows),
-        "polarization_observations": _write_jsonl(paths["polarization_observations"], polarization_rows),
-        "detection_results": _write_jsonl(paths["detection_results"], detection_rows),
-        "detection_alerts": _write_jsonl(
-            paths["detection_alerts"], (item.to_mapping() for item in alerts)
+        "activity_observations": _write_or_verify_jsonl(
+            paths["activity_observations"], activity_rows, resume=resume
         ),
-        "associations": _write_jsonl(
-            paths["associations"], (item.to_mapping() for item in associations)
+        "opinion_distributions": _write_or_verify_jsonl(
+            paths["opinion_distributions"], distribution_rows, resume=resume
         ),
-        "candidates": _write_jsonl(
-            paths["candidates"], (item.to_mapping() for item in candidates)
+        "polarization_observations": _write_or_verify_jsonl(
+            paths["polarization_observations"], polarization_rows, resume=resume
+        ),
+        "detection_results": _write_or_verify_jsonl(
+            paths["detection_results"], detection_rows, resume=resume
+        ),
+        "detection_alerts": _write_or_verify_jsonl(
+            paths["detection_alerts"],
+            (item.to_mapping() for item in alerts),
+            resume=resume,
+        ),
+        "associations": _write_or_verify_jsonl(
+            paths["associations"],
+            (item.to_mapping() for item in associations),
+            resume=resume,
+        ),
+        "candidates": _write_or_verify_jsonl(
+            paths["candidates"],
+            (item.to_mapping() for item in candidates),
+            resume=resume,
         ),
     }
-    _write_json(paths["activity_manifest"], {
+    _write_or_verify_json(paths["activity_manifest"], {
         "artifact_version": "causal_activity_signal_v1",
         "run_id": actual.identity.run_id,
         "signal_id": actual.signals.activity.signal_id,
@@ -700,12 +933,13 @@ def run_causal_end_to_end_replay(
         "observation_count": len(activity_rows),
         "artifact": str(paths["activity_observations"]),
         "causal_rule": "observation_time_utc < data_cutoff_utc",
-    })
-    _write_json(paths["polarization_manifest"], {
+    }, resume=resume)
+    _write_or_verify_json(paths["polarization_manifest"], {
         "artifact_version": "causal_polarization_signal_v1",
         "run_id": actual.identity.run_id,
         "experiment_run_id": actual.identity.run_id,
         "classification_run_id": temporal.classification_run_id,
+        **video_scope.to_manifest(),
         "window": temporal.window,
         "cadence": temporal.cadence,
         "enabled_measures": list(temporal.enabled_measures),
@@ -714,8 +948,8 @@ def run_causal_end_to_end_replay(
         "distribution_artifact": str(paths["opinion_distributions"]),
         "observation_artifact": str(paths["polarization_observations"]),
         "causal_rule": "observation_time_utc < data_cutoff_utc",
-    })
-    _write_json(paths["detection_manifest"], {
+    }, resume=resume)
+    _write_or_verify_json(paths["detection_manifest"], {
         "artifact_version": "causal_detection_v1",
         "run_id": actual.identity.run_id,
         "routes": [
@@ -728,8 +962,8 @@ def run_causal_end_to_end_replay(
         "triggered_alerts": len(alerts),
         "result_artifact": str(paths["detection_results"]),
         "alert_artifact": str(paths["detection_alerts"]),
-    })
-    _write_json(paths["association_manifest"], {
+    }, resume=resume)
+    _write_or_verify_json(paths["association_manifest"], {
         "artifact_version": "causal_detection_association_v1",
         "run_id": actual.identity.run_id,
         "policy_id": actual.association.policy_id,
@@ -738,8 +972,8 @@ def run_causal_end_to_end_replay(
         "end_of_stream_flush": True,
         "association_count": len(associations),
         "artifact": str(paths["associations"]),
-    })
-    _write_json(paths["candidate_manifest"], {
+    }, resume=resume)
+    _write_or_verify_json(paths["candidate_manifest"], {
         "artifact_version": "causal_event_candidate_v1",
         "run_id": actual.identity.run_id,
         "projection_policy_id": "association_to_candidate_v1",
@@ -747,18 +981,34 @@ def run_causal_end_to_end_replay(
         "artifact": str(paths["candidates"]),
         "evidence_embedded": False,
         "score_fusion": False,
-    })
+    }, resume=resume)
 
-    evidence: CandidateEvidenceArtifacts = build_candidate_evidence(
-        candidates=candidates,
-        config=evidence_config,
-        current_data_cutoff_utc=replay.end_utc,
-    )
+    evidence_root = Path(evidence_config.output_dir)
+    if resume and evidence_root.exists() and any(evidence_root.iterdir()):
+        evidence = _load_resumable_evidence(
+            root=evidence_root,
+            candidates=candidates,
+            run_id=actual.identity.run_id,
+            source_hash=prepared.manifest["source_sha256"],
+            evidence_config=evidence_config,
+        )
+    else:
+        evidence = build_candidate_evidence(
+            candidates=candidates,
+            config=evidence_config,
+            current_data_cutoff_utc=replay.end_utc,
+        )
     validation_rows: list[dict[str, Any]] = []
     rag_artifacts: list[CandidateRagArtifacts] = []
     rag_errors: list[dict[str, str]] = []
+    reused_candidates = 0
+    retried_candidates = 0
+    started_candidates = 0
+    backup_paths: list[str] = []
+    resume_timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    evidence_manifest_hash = source_sha256(evidence.manifest_path)
     if execute_rag:
-        for candidate in candidates:
+        for candidate_number, candidate in enumerate(candidates, 1):
             validation_config = replace(
                 actual.rag.candidate_validation,
                 candidates_path=str(paths["candidates"]),
@@ -767,6 +1017,48 @@ def run_causal_end_to_end_replay(
                 candidate_id=candidate.candidate_id,
             )
             try:
+                candidate_root = Path(validation_config.output_dir)
+                if resume and candidate_root.exists() and any(candidate_root.iterdir()):
+                    completed = _load_completed_candidate_rag(
+                        root=candidate_root,
+                        candidate=candidate,
+                        evidence_manifest_hash=evidence_manifest_hash,
+                        retry_errors=retry_rag_errors,
+                    )
+                    if completed is not None:
+                        reused_candidates += 1
+                        if progress is not None:
+                            progress(
+                                f"[resume {candidate_number}/{len(candidates)}] "
+                                f"reusing {candidate.candidate_id}"
+                            )
+                        rag_artifacts.append(completed)
+                        validation_rows.extend(
+                            json.loads(line)
+                            for line in completed.validation_results_path.read_text(
+                                encoding="utf-8"
+                            ).splitlines()
+                            if line.strip()
+                        )
+                        continue
+                    backup_root = (
+                        root / "resume_backups" / resume_timestamp / "candidate_rag"
+                    )
+                    backup_root.mkdir(parents=True, exist_ok=True)
+                    backup_path = backup_root / candidate.candidate_id
+                    shutil.move(str(candidate_root), str(backup_path))
+                    backup_paths.append(backup_path.as_posix())
+                    retried_candidates += 1
+                    action = "retrying archived partial/error"
+                else:
+                    started_candidates += 1
+                    action = "running"
+                if progress is not None:
+                    progress(
+                        f"[{'resume' if resume else 'run'} "
+                        f"{candidate_number}/{len(candidates)}] {action} "
+                        f"{candidate.candidate_id}"
+                    )
                 kwargs: dict[str, Any] = {"execute": True}
                 if g1_runner is not None:
                     kwargs["g1_runner"] = g1_runner
@@ -793,7 +1085,15 @@ def run_causal_end_to_end_replay(
                     "error_type": type(exc).__name__,
                     "message": str(exc),
                 })
-    artifact_hashes["validations"] = _write_jsonl(paths["validations"], validation_rows)
+                if progress is not None:
+                    progress(
+                        f"[{'resume' if resume else 'run'} "
+                        f"{candidate_number}/{len(candidates)}] failed "
+                        f"{candidate.candidate_id}: {type(exc).__name__}: {exc}"
+                    )
+    artifact_hashes["validations"] = _write_jsonl(
+        paths["validations"], validation_rows, overwrite=resume
+    )
     rag_manifests = [_read_json(item.manifest_path) for item in rag_artifacts]
     rag_token_usage = {
         name: sum(int(manifest.get("token_usage", {}).get(name, 0) or 0)
@@ -913,6 +1213,14 @@ def run_causal_end_to_end_replay(
         },
         "rag": {
             "executed": execute_rag,
+            "resume": {
+                "enabled": resume,
+                "retry_errors": retry_rag_errors,
+                "reused_complete_candidates": reused_candidates,
+                "retried_partial_or_error_candidates": retried_candidates,
+                "new_candidates_started": started_candidates,
+                "archived_candidate_paths": backup_paths,
+            },
             "g1_runner": "injected" if g1_runner is not None else "configured_default",
             "g2_runner": "injected" if g2_runner is not None else "configured_default",
             "candidate_failures_isolated": True,

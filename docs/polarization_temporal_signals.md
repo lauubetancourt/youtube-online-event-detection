@@ -174,8 +174,12 @@ configured local comments
 ```
 
 Preparation is the default. Real inference requires both `--execute` and an explicit,
-fresh `--output-root`. `polarization.runtime.video_ids` selects an explicit source
-slice; temporal selection remains owned by `signals.polarization`. The source role is
+fresh `--output-root`. By default, polarization derives its deterministic video scope
+from the prepared comment stream. Optional `polarization.runtime.video_ids` is an
+explicit intersection filter over that stream; an empty list is invalid and IDs
+absent from the comment stream cannot add data. Temporal selection remains owned by
+`signals.polarization`, while `data.local_files.videos_path` supplies metadata only.
+The source role is
 `PROVISIONAL_RUNTIME_INPUT` for the legacy CSV profile. Opt-in Silver executions use
 `causal_minimal_v1`, `silver_comments_v1`, and `CAUSAL_MINIMAL_V1`. Measure,
 classifier, temporal-signal, and detector parameters remain in separate configuration

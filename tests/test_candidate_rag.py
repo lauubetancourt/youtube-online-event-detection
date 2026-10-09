@@ -234,6 +234,11 @@ class _MockRag:
             "overall_validation_status": "partially_confirmed",
             "overall_interpretation": "unclear",
             "agreement_between_videos": "mixed",
+            "summary_completeness": "complete",
+            "event_batch_status": "complete",
+            "next_batch_required": False,
+            "pending_video_ids": [],
+            "failed_video_ids": [],
         }
         evidence = [{
             "external_evidence_id": "external-1",
@@ -372,6 +377,16 @@ class CandidateRagTests(unittest.TestCase):
             self.assertEqual(result["internal_future_leak_count"], 0)
             self.assertEqual(result["external_future_leak_count"], 0)
             self.assertEqual(result["g2_execution_status"], G2_EXECUTED)
+            self.assertEqual(result["internal_validation_status"], "CONFIRMED")
+            self.assertEqual(result["internal_execution_status"], "EXECUTED")
+            self.assertEqual(result["internal_completeness_status"], "COMPLETE")
+            self.assertIsNone(result["internal_reason_code"])
+            self.assertEqual(
+                result["external_validation_status"], "INSUFFICIENT_EVIDENCE"
+            )
+            self.assertEqual(result["external_execution_status"], "EXECUTED")
+            self.assertEqual(result["external_completeness_status"], "COMPLETE")
+            self.assertIsNone(result["external_reason_code"])
             self.assertEqual(
                 result["g2_gate_decision"]["reason_code"], "GATE_OFF_BASELINE"
             )
@@ -517,6 +532,15 @@ class CandidateRagTests(unittest.TestCase):
                 self.assertIsNone(result["g1_result"])
                 self.assertIsNone(result["g2_result"])
                 self.assertEqual(result["g2_execution_status"], G2_NOT_ELIGIBLE)
+                if expected == NO_EVIDENCE_FOUND:
+                    self.assertEqual(
+                        result["internal_execution_status"], "NOT_ELIGIBLE"
+                    )
+                    self.assertEqual(
+                        result["external_completeness_status"], "COMPLETE"
+                    )
+                    self.assertIsNone(result["external_validation_status"])
+                    self.assertEqual(result["external_reason_code"], "NO_EVIDENCE")
 
     def test_explicit_execute_guard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

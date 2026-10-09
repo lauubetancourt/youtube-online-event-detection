@@ -16,7 +16,7 @@ from youtube_pipeline.polarization_runtime import (
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = build_common_run_parser(
-        description="Classify an explicit real-comment slice and emit temporal polarization signals."
+        description="Classify a prepared real-comment scope and emit temporal polarization signals."
     )
     args = parser.parse_args(argv)
     config = load_run_config(args.config_path, overrides=(
@@ -37,6 +37,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "input_path": str(plan.comments_path),
         "input_rows": len(plan.comments),
         "video_ids": list(plan.selected_video_ids),
+        **plan.video_scope.to_manifest(),
         "selected_time_min_utc": plan.selected_time_min_utc.isoformat(),
         "selected_time_max_utc": plan.selected_time_max_utc.isoformat(),
         "expected_classifier_calls": plan.expected_classifier_calls,

@@ -561,6 +561,20 @@ class ClassifierEntrypointTests(unittest.TestCase):
             source = root / "comments.csv"
             output = root / "stances"
             configured = payload()
+            configured["polarization"]["runtime"] = {
+                "input_schema": "silver_comments_v1",
+                "source_role": "CAUSAL_MINIMAL_V1",
+            }
+            configured["polarization"]["mec"] = {}
+            configured["signals"] = {"polarization": {
+                "proposition_id": "p",
+                "classification_run_id": "d1_c1_stance",
+                "window": "1h",
+                "cadence": "15min",
+                "start_time_utc": "2026-04-20T14:00:00Z",
+                "end_time_utc": "2026-04-20T15:00:00Z",
+                "enabled_measures": ["mec"],
+            }}
             configured["data"] = {
                 "local_files": {
                     "videos_path": str(root / "videos"),
@@ -599,6 +613,9 @@ class ClassifierEntrypointTests(unittest.TestCase):
                 (1, 1, 0),
             )
             self.assertEqual(prepared["expected_model_calls"], 2)
+            self.assertEqual(prepared["video_scope_mode"], "ALL_FROM_COMMENT_STREAM")
+            self.assertEqual(prepared["effective_video_count"], 1)
+            self.assertEqual(len(prepared["effective_video_ids_hash"]), 64)
             self.assertEqual(prepared["authoritative_source_path"], str(source.absolute()))
             self.assertEqual(
                 prepared["authoritative_source_sha256"],

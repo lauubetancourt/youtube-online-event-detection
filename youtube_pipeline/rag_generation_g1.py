@@ -18,9 +18,20 @@ from youtube_pipeline.validation_status import (
     NOT_CONFIRMED,
     VALIDATION_STATUS_VALUES,
 )
+from youtube_pipeline.validation_state import (
+    COMPLETE,
+    CONTEXT_LIMIT_EXCEEDED,
+    EXECUTED,
+    FAILED,
+    INVALID_CITATION,
+    MISSING_PAYLOAD,
+    PARTIAL,
+    PROVIDER_ERROR,
+    TIMEOUT,
+)
 
 
-RAG_G1_ARTIFACT_VERSION = "rag_generation_g1_v2"
+RAG_G1_ARTIFACT_VERSION = "rag_generation_g1_v3"
 PROMPT_VERSION = "rag_validation_prompt_v0.2"
 
 RAG_VALIDATION_INPUTS_FILE = "rag_validation_inputs.jsonl"
@@ -613,6 +624,20 @@ def _finalize_report(
     post_trigger_context_used: bool,
 ) -> dict[str, Any]:
     report = dict(model_report)
+    if citation_verification.get("valid"):
+        report.update(
+            execution_status=EXECUTED,
+            completeness_status=COMPLETE,
+            reason_code=None,
+        )
+    else:
+        report["model_validation_status"] = report.get("validation_status")
+        report.update(
+            validation_status=None,
+            execution_status=FAILED,
+            completeness_status=PARTIAL,
+            reason_code=INVALID_CITATION,
+        )
     report["validation_id"] = validation_id
     report["event_id"] = event_id
     report["model_name"] = model
@@ -639,10 +664,24 @@ def _error_report(
     errors: list[str],
     attempt_count: int,
 ) -> dict[str, Any]:
+    error_text = " ".join(errors).lower()
+    if "context_limit_exceeded" in error_text:
+        reason_code = CONTEXT_LIMIT_EXCEEDED
+    elif "timeout" in error_text:
+        reason_code = TIMEOUT
+    elif "citation" in error_text:
+        reason_code = INVALID_CITATION
+    elif "parse" in error_text or "schema" in error_text or "payload" in error_text:
+        reason_code = MISSING_PAYLOAD
+    else:
+        reason_code = PROVIDER_ERROR
     return {
         "validation_id": validation_id,
         "event_id": event_id,
-        "validation_status": INSUFFICIENT_EVIDENCE,
+        "validation_status": None,
+        "execution_status": FAILED,
+        "completeness_status": PARTIAL,
+        "reason_code": reason_code,
         "event_interpretation": "unclear",
         "confidence_label": "low",
         "claim_summary": "No se obtuvo una validacion generativa estructurada valida.",
@@ -988,6 +1027,9 @@ def run_rag_g1_validation_from_config(config: RagG1Config) -> dict[str, Any]:
         "errors": manifest_errors,
         "citation_verification": report.get("citation_verification"),
         "validation_status": report.get("validation_status"),
+        "execution_status": report.get("execution_status"),
+        "completeness_status": report.get("completeness_status"),
+        "reason_code": report.get("reason_code"),
         "event_interpretation": report.get("event_interpretation"),
         "notes": config.notes,
         "params": config.params,
@@ -999,6 +1041,9 @@ def run_rag_g1_validation_from_config(config: RagG1Config) -> dict[str, Any]:
         "created_at_utc": created_at_utc,
         "validation_id": validation_id,
         "validation_status": report.get("validation_status"),
+        "execution_status": report.get("execution_status"),
+        "completeness_status": report.get("completeness_status"),
+        "reason_code": report.get("reason_code"),
         "event_interpretation": report.get("event_interpretation"),
         "confidence_label": report.get("confidence_label"),
         "approx_tokens": approx_tokens,
@@ -1090,6 +1135,9 @@ def run_rag_g1_validation_from_config(config: RagG1Config) -> dict[str, Any]:
         "attempts": len(raw_records),
         "retry_count": manifest["retry_count"],
         "validation_status": report.get("validation_status"),
+        "execution_status": report.get("execution_status"),
+        "completeness_status": report.get("completeness_status"),
+        "reason_code": report.get("reason_code"),
         "event_interpretation": report.get("event_interpretation"),
         "confidence_label": report.get("confidence_label"),
         "citation_verification": report.get("citation_verification"),

@@ -2,11 +2,13 @@
   "identity": {
     "run_id": "d1_c1_b"
   },
+
   "topic_profile": "c1_ivan_cepeda",
+
   "data": {
     "local_files": {
-      "videos_path": "data/silver/videos",
-      "comments_path": "data/silver/experiments/d1_sample_1000.csv",
+      "videos_path": "data/silver/experiments/d1/videos_preliminares.csv",
+      "comments_path": "data/silver/experiments/d1/d1.csv",
       "data_root": "data"
     },
     "experimental_input": {
@@ -16,10 +18,11 @@
       "semantic_filtering": false
     }
   },
+
   "simulation": {
     "causal_end_to_end": {
-      "start_utc": "2026-04-20T17:33:00Z",
-      "end_utc": "2026-04-21T18:07:10Z",
+      "start_utc": "2026-02-08T17:05:53Z",
+      "end_utc": "2026-04-21T18:09:15Z",
       "step": "1min",
       "output_dir": "outputs/causal_end_to_end/d1_c1_b",
       "stance_artifact_path": "outputs/stances/d1_c1_stance/comment_stances.jsonl",
@@ -29,6 +32,7 @@
       "stance_mode": "precomputed_stances_v1"
     }
   },
+
   "signals": {
     "activity": {
       "signal_id": "comment_count_event_window_900s_step_180s",
@@ -42,24 +46,22 @@
       "timezone": "UTC",
       "interval_policy": "closed"
     },
+
     "polarization": {
       "proposition_id": "C1",
       "classification_run_id": "d1_c1_stance",
       "window": "90min",
       "cadence": "15min",
-      "start_time_utc": "2026-04-20T17:33:00Z",
-      "end_time_utc": "2026-04-21T18:07:10Z",
-      "enabled_measures": [
-        "esteban_ray",
-        "emd_pol",
-        "mec"
-      ],
+      "start_time_utc": "2026-02-08T17:05:53Z",
+      "end_time_utc": "2026-04-21T18:09:15Z",
+      "enabled_measures": ["esteban_ray", "emd_pol", "mec"],
       "interval_policy": "closed",
       "time_basis": "event_time_utc",
       "timezone": "UTC",
       "distribution_policy_id": "likert5_author_latest_classified_v1"
     }
   },
+
   "detection": {
     "routes": {
       "comment_count_event_window_900s_step_180s": {
@@ -75,9 +77,11 @@
         "detector_id": "kswin"
       }
     },
+
     "gap_policy": {
       "policy_id": "preserve_state_v1"
     },
+
     "page_hinkley": {
       "min_instances": 30,
       "delta": 0.005,
@@ -85,6 +89,7 @@
       "alpha": 0.9999,
       "mode": "both"
     },
+
     "adwin": {
       "delta": 0.002,
       "clock": 32,
@@ -92,6 +97,7 @@
       "min_window_length": 5,
       "grace_period": 10
     },
+
     "kswin": {
       "alpha": 0.005,
       "window_size": 100,
@@ -99,11 +105,13 @@
       "seed": 42
     }
   },
+
   "association": {
     "policy_id": "bounded_temporal_clusters_v1",
     "tolerance": "5min",
     "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
   },
+
   "polarization": {
     "classifier": {
       "model": "gpt-4.1-2025-04-14",
@@ -119,28 +127,27 @@
       "max_completion_tokens": 128,
       "request_timeout_seconds": 30.0
     },
+
     "runtime": {
-      "video_ids": [
-        "4OLMjGCX-5E",
-        "L9t3c7I9WRc",
-        "QKl-xXUJWuo",
-        "kVduNL04A84"
-      ],
       "input_schema": "silver_comments_v1",
       "source_role": "CAUSAL_MINIMAL_V1"
     },
+
     "esteban_ray": {
       "alpha": 0.8
     },
+
     "emd_pol": {},
+
     "mec": {
       "alpha": 2.0,
       "beta": 1.15
     }
   },
+
   "rag": {
     "candidate_evidence": {
-      "source_path": "data/silver/experiments/d1_sample_1000.csv",
+      "source_path": "data/silver/experiments/d1/d1.csv",
       "output_dir": "outputs/causal_end_to_end/d1_c1_b/candidate_evidence",
       "lookback": "10min",
       "lookahead": "0s",
@@ -152,6 +159,7 @@
       "input_policy_id": "causal_minimal_v1",
       "max_comments_per_context_unit": 25
     },
+
     "candidate_validation": {
       "candidates_path": "outputs/causal_end_to_end/d1_c1_b/event_candidates.jsonl",
       "evidence_dir": "outputs/causal_end_to_end/d1_c1_b/candidate_evidence",
@@ -159,12 +167,14 @@
       "candidate_id": "runtime-placeholder",
       "g1_max_approx_tokens": 16000
     },
+
     "g2_gate": {
       "policy_id": "g1_gate_v1",
       "mode": "OFF",
       "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
     }
   },
+
   "artifacts": {
     "run_mode": "development",
     "trace_level": "minimal"

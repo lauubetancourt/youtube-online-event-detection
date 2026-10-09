@@ -461,6 +461,60 @@ class CausalEndToEndTests(unittest.TestCase):
         self.assertEqual(replay_manifest["experiment_run_id"], "d1_c1_b")
         self.assertEqual(replay_manifest["classification_run_id"], "d1_c1_stance")
 
+    def test_precomputed_label_manifest_is_accepted_without_false_llm_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(
+                root,
+                run_id="d1_c1_b",
+                output_name="out",
+                classification_run_id="d1_c1_stance",
+            )
+            manifest_path = root / "classifier_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest.update({
+                "stance_source_type": "PRECOMPUTED_LABELS",
+                "provider": None,
+                "model": None,
+                "model_calls": 0,
+                "openai_calls": 0,
+                "prompt_id": None,
+                "prompt_version": None,
+                "label_field": "C1",
+                "relevance_field": "I1",
+                "sentiment_field": "S1",
+                "sentiment_used_for_stance": False,
+                "classification_policy": {
+                    "policy_id": "precomputed_labels_c_i_v1",
+                    "sentiment_used_for_stance": False,
+                },
+            })
+            _write_json(manifest_path, manifest)
+
+            artifacts = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                detector_factory=self._no_trigger_detector,
+            )
+            self.assertTrue(artifacts.manifest_path.exists())
+
+    def test_precomputed_label_manifest_rejects_false_llm_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(root, run_id="d1_c1_b", output_name="out")
+            manifest_path = root / "classifier_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest.update({
+                "stance_source_type": "PRECOMPUTED_LABELS",
+                "provider": "openai",
+                "model_calls": 0,
+                "openai_calls": 0,
+            })
+            _write_json(manifest_path, manifest)
+
+            with self.assertRaisesRegex(ValueError, "must not claim"):
+                run_causal_end_to_end_replay(config, base_dir=root)
+
     def test_same_stance_artifact_is_reused_by_a_b_and_c(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -920,6 +974,97 @@ class CausalEndToEndTests(unittest.TestCase):
             )
             self.assertEqual(rag.g1_calls, 1)
             self.assertEqual(rag.g2_calls, 1)
+
+    def test_resume_reuses_completed_candidate_without_new_rag_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(root, run_id="resume-run", output_name="out")
+
+            def detector_factory(detector_id: str, _config):
+                return _FirstUpdateDetector(
+                    detector_id, trigger=detector_id == "page_hinkley"
+                )
+
+            first_rag = _MockRag()
+            run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                execute_rag=True,
+                detector_factory=detector_factory,
+                g1_runner=first_rag.g1,
+                g2_runner=first_rag.g2,
+            )
+            resumed_rag = _MockRag()
+            artifacts = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                execute_rag=True,
+                resume=True,
+                detector_factory=detector_factory,
+                g1_runner=resumed_rag.g1,
+                g2_runner=resumed_rag.g2,
+            )
+
+            manifest = json.loads(artifacts.manifest_path.read_text())
+            self.assertEqual(resumed_rag.g1_calls, 0)
+            self.assertEqual(resumed_rag.g2_calls, 0)
+            self.assertEqual(
+                manifest["rag"]["resume"]["reused_complete_candidates"], 1
+            )
+            self.assertEqual(artifacts.validations, 1)
+
+    def test_resume_archives_and_retries_completed_rag_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(root, run_id="resume-error-run", output_name="out")
+
+            def detector_factory(detector_id: str, _config):
+                return _FirstUpdateDetector(
+                    detector_id, trigger=detector_id == "page_hinkley"
+                )
+
+            first_rag = _MockRag()
+            first = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                execute_rag=True,
+                detector_factory=detector_factory,
+                g1_runner=first_rag.g1,
+                g2_runner=first_rag.g2,
+            )
+            candidate_id = _read_jsonl(first.candidate_path)[0]["candidate_id"]
+            candidate_root = first.output_dir / "candidate_rag" / candidate_id
+            candidate_manifest_path = (
+                candidate_root / "candidate_rag_validation_manifest.json"
+            )
+            candidate_manifest = json.loads(candidate_manifest_path.read_text())
+            candidate_manifest["status"] = "VALIDATION_ERROR"
+            candidate_manifest["g2"]["execution_status"] = "FAILED"
+            _write_json(candidate_manifest_path, candidate_manifest)
+
+            resumed_rag = _MockRag()
+            artifacts = run_causal_end_to_end_replay(
+                config,
+                base_dir=root,
+                execute_rag=True,
+                resume=True,
+                retry_rag_errors=True,
+                detector_factory=detector_factory,
+                g1_runner=resumed_rag.g1,
+                g2_runner=resumed_rag.g2,
+            )
+
+            manifest = json.loads(artifacts.manifest_path.read_text())
+            resume_summary = manifest["rag"]["resume"]
+            self.assertEqual(resumed_rag.g1_calls, 1)
+            self.assertEqual(resumed_rag.g2_calls, 1)
+            self.assertEqual(
+                resume_summary["retried_partial_or_error_candidates"], 1
+            )
+            archived = [Path(path) for path in resume_summary["archived_candidate_paths"]]
+            self.assertEqual(len(archived), 1)
+            self.assertTrue(archived[0].is_dir())
+            self.assertTrue(candidate_manifest_path.is_file())
 
     def test_same_input_config_and_mocks_preserve_deterministic_identities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

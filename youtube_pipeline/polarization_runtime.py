@@ -31,6 +31,11 @@ from youtube_pipeline.polarization_detection_runtime import (
     load_polarization_signal_observations,
     run_polarization_detection_runtime,
 )
+from youtube_pipeline.polarization_runtime_config import (
+    VideoScope,
+    normalize_video_id,
+    resolve_video_scope,
+)
 from youtube_pipeline.polarization_signals import PolarizationTemporalTick
 from youtube_pipeline.signal_observations import VALUE_AVAILABLE, to_json_mapping
 from youtube_pipeline.stance_classifier import StanceCommentInput, StanceModelTransport
@@ -81,6 +86,7 @@ class PolarizationRuntimePlan:
     videos_path: Path
     source_row_count: int
     selected_video_ids: tuple[str, ...]
+    video_scope: VideoScope
     selected_video_metadata: tuple[dict[str, str | None], ...]
     selection_start_utc: datetime
     selection_end_utc: datetime
@@ -158,8 +164,16 @@ def prepare_polarization_runtime(config: RunConfig) -> PolarizationRuntimePlan:
         if comments["comment_id"].isna().any():
             raise ValueError("Comments input requires non-null comment_id values.")
 
+    scope = resolve_video_scope(
+        (record.video_id for record in policy_records)
+        if policy_records is not None
+        else comments["video_id"].tolist(),
+        runtime.video_ids,
+    )
+    effective_video_ids = scope.effective_video_ids
+    normalized_video_ids = comments["video_id"].map(normalize_video_id)
     selected = comments[
-        comments["video_id"].astype(str).isin(runtime.video_ids)
+        normalized_video_ids.isin(effective_video_ids)
         & (comments["event_time_utc_runtime"] >= selection_start)
         & (comments["event_time_utc_runtime"] < selection_end)
     ].copy()
@@ -217,18 +231,25 @@ def prepare_polarization_runtime(config: RunConfig) -> PolarizationRuntimePlan:
     videos = read_input_table(videos_path)
     if not {"video_id", "title"} <= set(videos.columns):
         raise ValueError("Videos input requires video_id and title columns.")
-    video_lookup = {str(row.video_id): row for row in videos.itertuples(index=False)}
-    absent = sorted(set(runtime.video_ids) - set(video_lookup))
-    if absent:
-        raise ValueError(f"Configured video_ids are absent from videos input: {absent}")
+    video_lookup = {
+        video_id: row
+        for row in videos.itertuples(index=False)
+        if (video_id := normalize_video_id(row.video_id)) is not None
+    }
     metadata = tuple({
         "video_id": video_id,
-        "title": _optional_text(video_lookup[video_id].title),
-        "published_at": _optional_text(getattr(video_lookup[video_id], "publishedAt", None)),
-    } for video_id in runtime.video_ids)
+        "title": (
+            _optional_text(video_lookup[video_id].title)
+            if video_id in video_lookup else None
+        ),
+        "published_at": (
+            _optional_text(getattr(video_lookup[video_id], "publishedAt", None))
+            if video_id in video_lookup else None
+        ),
+    } for video_id in effective_video_ids)
     return PolarizationRuntimePlan(
         tuple(comments_input), comments_path, videos_path, source_row_count,
-        runtime.video_ids, metadata, selection_start, selection_end,
+        effective_video_ids, scope, metadata, selection_start, selection_end,
         comments_input[0].event_time_utc, comments_input[-1].event_time_utc,
         expected_calls, input_policy_manifest,
     )
@@ -414,6 +435,7 @@ async def run_polarization_runtime(
             "source_row_count": plan.source_row_count,
             "selected_row_count": len(plan.comments),
             "video_ids": list(plan.selected_video_ids),
+            **plan.video_scope.to_manifest(),
             "videos": list(plan.selected_video_metadata),
             "selection_start_utc": plan.selection_start_utc.isoformat(),
             "selection_end_utc": plan.selection_end_utc.isoformat(),

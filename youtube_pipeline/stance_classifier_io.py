@@ -19,6 +19,7 @@ from youtube_pipeline.experimental_input import (
 from youtube_pipeline.stance_classifier import (
     OpenAICommentStanceClassifier, StanceCommentInput, StanceModelTransport,
 )
+from youtube_pipeline.polarization_runtime_config import VideoScope, resolve_video_scope
 from youtube_pipeline.storage import canonicalize_comment_event_time
 from youtube_pipeline.stance_classifier_prompt import (
     REFERENCE_NOTEBOOK, REFERENCE_NOTEBOOK_SHA256, SYSTEM_INSTRUCTIONS, response_format,
@@ -61,6 +62,7 @@ class CsvStanceInputPlan:
     replies_with_parent: int
     missing_parents: int
     expected_model_calls: int
+    video_scope: VideoScope
 
 
 def prepare_csv_stance_inputs(
@@ -88,9 +90,21 @@ def prepare_csv_stance_inputs(
         config.data.experimental_input,
         source_path=source,
     )
-    adapted = adapt_stance_records(batch.records)
+    runtime = config.polarization.runtime if config.polarization is not None else None
+    scope = resolve_video_scope(
+        (record.video_id for record in batch.records),
+        runtime.video_ids if runtime is not None else None,
+    )
+    effective_video_ids = set(scope.effective_video_ids)
+    selected_records = tuple(
+        record for record in batch.records if record.video_id in effective_video_ids
+    )
+    adapted = tuple(
+        item for item in adapt_stance_records(batch.records)
+        if item.video_id in effective_video_ids
+    )
     comments = tuple(item.classifier_input for item in adapted)
-    replies = sum(record.is_reply for record in batch.records)
+    replies = sum(record.is_reply for record in selected_records)
     replies_with_parent = sum(
         item.classifier_input.parent_comment_id is not None
         and item.classifier_input.parent_text is not None
@@ -116,11 +130,12 @@ def prepare_csv_stance_inputs(
         authoritative_source_hash=batch.manifest["source_sha256"],
         input_policy_id=config.data.experimental_input.policy_id,
         source_rows=len(dataframe),
-        roots=len(batch.records) - replies,
+        roots=len(selected_records) - replies,
         replies=replies,
         replies_with_parent=replies_with_parent,
         missing_parents=replies - replies_with_parent,
         expected_model_calls=expected_model_calls,
+        video_scope=scope,
     )
 
 

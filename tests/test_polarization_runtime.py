@@ -17,6 +17,7 @@ from youtube_pipeline.polarization_runtime import (
     prepare_polarization_runtime,
     run_polarization_runtime,
 )
+from youtube_pipeline.polarization_runtime_config import ALL_FROM_COMMENT_STREAM, EXPLICIT_FILTER
 from youtube_pipeline.stance_classifier import StanceModelResponse, TokenUsage
 
 
@@ -113,6 +114,26 @@ class PolarizationRuntimeTests(unittest.TestCase):
             self.assertEqual(len(plan.comments), 7)
             self.assertEqual(plan.selected_video_ids, ("v1",))
             self.assertEqual(plan.expected_classifier_calls, 6)
+            self.assertEqual(plan.video_scope.mode, EXPLICIT_FILTER)
+
+    def test_prepare_derives_all_videos_when_filter_is_omitted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = _fixture(root)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            del payload["polarization"]["runtime"]["video_ids"]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            config = load_run_config(path)
+            from youtube_pipeline.configuration import resolve_run_config
+            plan = prepare_polarization_runtime(
+                resolve_run_config(config, base_dir=root).config
+            )
+
+            self.assertEqual(plan.selected_video_ids, ("v1",))
+            self.assertEqual(plan.video_scope.mode, ALL_FROM_COMMENT_STREAM)
+            self.assertEqual(plan.video_scope.effective_video_count, 1)
+            self.assertEqual(len(plan.video_scope.effective_video_ids_hash), 64)
 
     def test_end_to_end_persisted_handoff_statuses_lineage_and_measures(self):
         with tempfile.TemporaryDirectory() as directory:

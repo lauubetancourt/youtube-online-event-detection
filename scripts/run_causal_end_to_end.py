@@ -29,7 +29,17 @@ def main() -> int:
         action="store_true",
         help="Execute the replay, including configured G-1/G-2 calls for ready evidence.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume a compatible interrupted run. Completed candidates are reused; "
+            "partial and error results are archived and retried."
+        ),
+    )
     args = parser.parse_args()
+    if args.resume and not args.execute:
+        parser.error("--resume requires --execute.")
     run = load_run_config(args.config)
     resolved = resolve_run_config(run, base_dir=args.base_dir)
     replay = (
@@ -55,6 +65,9 @@ def main() -> int:
         run,
         base_dir=args.base_dir,
         execute_rag=True,
+        resume=args.resume,
+        retry_rag_errors=True,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
     print(json.dumps({
         "status": "executed_successfully",

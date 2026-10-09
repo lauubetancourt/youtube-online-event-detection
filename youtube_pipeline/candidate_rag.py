@@ -73,11 +73,22 @@ from youtube_pipeline.rag_generation_g2_hierarchical import (
     RagG2HierarchicalConfig,
     run_rag_g2_hierarchical_from_config,
 )
-from youtube_pipeline.validation_status import normalize_validation_status
+from youtube_pipeline.validation_state import (
+    COMPLETE,
+    MISSING_PAYLOAD,
+    NOT_ELIGIBLE,
+    NOT_EXECUTED,
+    PARTIAL,
+    PROVIDER_ERROR,
+    ValidationState,
+    no_evidence_state,
+    normalize_g1_state,
+    normalize_g2_state,
+)
 
 
 CANDIDATE_RAG_INTEGRATION_V1 = "candidate_rag_integration_v1"
-CANDIDATE_RAG_ARTIFACT_VERSION = "candidate_rag_validation_v2"
+CANDIDATE_RAG_ARTIFACT_VERSION = "candidate_rag_validation_v3"
 EXTERNAL_CAUSAL_POLICY_V1 = "published_strictly_before_evidence_cutoff_v1"
 
 VALIDATED = "VALIDATED"
@@ -273,6 +284,14 @@ class CandidateValidationResult:
     g2_execution_status: str
     g2_gate_decision: dict[str, Any] | None
     final_synthesis: dict[str, Any] | None
+    internal_validation_status: str | None
+    internal_execution_status: str
+    internal_completeness_status: str
+    internal_reason_code: str | None
+    external_validation_status: str | None
+    external_execution_status: str
+    external_completeness_status: str
+    external_reason_code: str | None
     inventory_comment_count: int
     selected_comment_count: int
     selected_fraction: float
@@ -327,6 +346,18 @@ class CandidateValidationResult:
             raise ValueError("Candidate validation results cannot contain future leaks.")
         if any(not isinstance(item, str) or not item.strip() for item in self.limitations):
             raise ValueError("limitations must contain non-empty strings.")
+        ValidationState(
+            self.internal_execution_status,
+            self.internal_completeness_status,
+            self.internal_validation_status,
+            self.internal_reason_code,
+        )
+        ValidationState(
+            self.external_execution_status,
+            self.external_completeness_status,
+            self.external_validation_status,
+            self.external_reason_code,
+        )
 
     def to_mapping(self) -> dict[str, Any]:
         return asdict(self)
@@ -558,28 +589,56 @@ def _g2_projections(
     return video, summary, evidence
 
 
+def _validation_states(
+    g1: dict[str, Any] | None,
+    g2: dict[str, Any] | None,
+    *,
+    evidence_status: str,
+    g2_execution_status: str,
+    g2_video_records: list[dict[str, Any]],
+) -> tuple[ValidationState, ValidationState]:
+    if evidence_status == NO_EVIDENCE_FOUND:
+        terminal = no_evidence_state()
+        return terminal, terminal
+    if evidence_status != EVIDENCE_READY:
+        unavailable = ValidationState(
+            NOT_EXECUTED, PARTIAL, None, MISSING_PAYLOAD
+        )
+        return unavailable, unavailable
+
+    internal = normalize_g1_state(g1)
+    if g2_execution_status == G2_EXECUTED:
+        external = normalize_g2_state(g2, video_reports=g2_video_records)
+    elif g2_execution_status == G2_FAILED:
+        external = normalize_g2_state(
+            None,
+            attempted=True,
+            technical_failure_reason=PROVIDER_ERROR,
+        )
+    elif g2_execution_status in {G2_SKIPPED_BY_G1_GATE, G2_NOT_ELIGIBLE}:
+        external = ValidationState(NOT_ELIGIBLE, COMPLETE, None, None)
+    else:  # pragma: no cover - guarded by CandidateValidationResult
+        external = ValidationState(NOT_EXECUTED, PARTIAL, None, None)
+    return internal, external
+
+
 def _final_synthesis(
     g1: dict[str, Any] | None,
     g2: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if g1 is None and g2 is None:
-        return None
-    internal_status = normalize_validation_status(
-        g1.get("validation_status") if g1 is not None else None,
-        allow_none=True,
-    )
-    external_status = normalize_validation_status(
-        g2.get("overall_validation_status") if g2 is not None else None,
-        allow_none=True,
-    )
+    *,
+    internal_state: ValidationState,
+    external_state: ValidationState,
+) -> dict[str, Any]:
     return {
-        "policy": "separate_internal_validation_and_external_corroboration_v2",
-        "internal_validation_status": (
-            internal_status
-        ),
-        "external_validation_status": (
-            external_status
-        ),
+        "policy": "separate_validation_execution_completeness_v3",
+        "internal_validation_status": internal_state.validation_status,
+        "internal_execution_status": internal_state.execution_status,
+        "internal_completeness_status": internal_state.completeness_status,
+        "internal_reason_code": internal_state.reason_code,
+        "external_validation_status": external_state.validation_status,
+        "external_execution_status": external_state.execution_status,
+        "external_completeness_status": external_state.completeness_status,
+        "external_reason_code": external_state.reason_code,
         "event_interpretation": (
             g2.get("overall_interpretation")
             if g2 is not None
@@ -803,7 +862,19 @@ def run_candidate_rag_validation(
     else:
         status = evidence_status
 
-    final_synthesis = _final_synthesis(g1_summary, g2_summary)
+    internal_state, external_state = _validation_states(
+        g1_summary,
+        g2_summary,
+        evidence_status=evidence_status,
+        g2_execution_status=g2_execution_status,
+        g2_video_records=g2_video_records,
+    )
+    final_synthesis = _final_synthesis(
+        g1_summary,
+        g2_summary,
+        internal_state=internal_state,
+        external_state=external_state,
+    )
     result = CandidateValidationResult(
         validation_id=validation_id,
         candidate_id=candidate.candidate_id,
@@ -821,6 +892,14 @@ def run_candidate_rag_validation(
             gate_decision.to_mapping() if gate_decision is not None else None
         ),
         final_synthesis=final_synthesis,
+        internal_validation_status=internal_state.validation_status,
+        internal_execution_status=internal_state.execution_status,
+        internal_completeness_status=internal_state.completeness_status,
+        internal_reason_code=internal_state.reason_code,
+        external_validation_status=external_state.validation_status,
+        external_execution_status=external_state.execution_status,
+        external_completeness_status=external_state.completeness_status,
+        external_reason_code=external_state.reason_code,
         inventory_comment_count=inventory_count,
         selected_comment_count=selected_count,
         selected_fraction=selected_fraction,
@@ -900,7 +979,11 @@ def run_candidate_rag_validation(
             "legacy_rag_modified": False,
         },
         "g1": {
-            "executed": evidence_status == EVIDENCE_READY,
+            "execution_status": internal_state.execution_status,
+            "completeness_status": internal_state.completeness_status,
+            "validation_status": internal_state.validation_status,
+            "reason_code": internal_state.reason_code,
+            "executed": internal_state.execution_status == "EXECUTED",
             "model": config.g1_model,
             "prompt_version": G1_PROMPT_VERSION,
             "artifact_version": RAG_G1_ARTIFACT_VERSION,
@@ -912,8 +995,12 @@ def run_candidate_rag_validation(
             "context_coverage": context_coverage,
         },
         "g2": {
-            "execution_status": g2_execution_status,
-            "executed": g2_execution_status == G2_EXECUTED,
+            "execution_status": external_state.execution_status,
+            "completeness_status": external_state.completeness_status,
+            "validation_status": external_state.validation_status,
+            "reason_code": external_state.reason_code,
+            "legacy_gate_execution_status": g2_execution_status,
+            "executed": external_state.execution_status == "EXECUTED",
             "gate": (
                 gate_decision.to_mapping()
                 if gate_decision is not None

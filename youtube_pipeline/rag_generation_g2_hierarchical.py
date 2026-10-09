@@ -54,9 +54,21 @@ from youtube_pipeline.validation_status import (
     NOT_CONFIRMED,
     normalize_validation_status,
 )
+from youtube_pipeline.validation_state import (
+    COMPLETE,
+    EXECUTED,
+    FAILED,
+    INVALID_CITATION,
+    INVALID_QUERY,
+    MISSING_PAYLOAD,
+    PARTIAL,
+    PENDING_BATCHES,
+    PROVIDER_ERROR,
+    VIDEO_FAILURES,
+)
 
 
-RAG_G2H_ARTIFACT_VERSION = "rag_generation_g2_hierarchical_v3"
+RAG_G2H_ARTIFACT_VERSION = "rag_generation_g2_hierarchical_v4"
 QUERY_PROMPT_VERSION = "rag_video_news_query_prompt_v0.3"
 VALIDATION_PROMPT_VERSION = "rag_video_validation_g2_prompt_v0.3"
 
@@ -1363,6 +1375,11 @@ def _finalize_video_report(
     external_evidence_count: int,
 ) -> dict[str, Any]:
     report = dict(model_report)
+    report.update(
+        execution_status=EXECUTED,
+        completeness_status=COMPLETE,
+        reason_code=None,
+    )
     report["video_validation_id"] = video_validation_id
     report["event_id"] = event_id
     report["video_id"] = video_id
@@ -1399,11 +1416,22 @@ def _error_video_report(
     query_candidate_id: str | None,
     external_evidence_count: int,
 ) -> dict[str, Any]:
+    error_text = " ".join(errors).lower()
+    reason_code = (
+        INVALID_CITATION
+        if "citation" in error_text or "cited_" in error_text
+        else MISSING_PAYLOAD
+        if "parse" in error_text or "schema" in error_text or "payload" in error_text
+        else PROVIDER_ERROR
+    )
     return {
         "video_validation_id": video_validation_id,
         "event_id": event_id,
         "video_id": video_id,
-        "validation_status": INSUFFICIENT_EVIDENCE,
+        "validation_status": None,
+        "execution_status": FAILED,
+        "completeness_status": PARTIAL,
+        "reason_code": reason_code,
         "event_interpretation": "unclear",
         "confidence_label": "low",
         "internal_evidence_summary": "",
@@ -1501,6 +1529,7 @@ def _build_event_summary(
             report.get("validation_status")
         )
         for report in video_reports
+        if report.get("validation_status") not in (None, "")
     }
 
     if not videos_with_external_evidence:
@@ -1573,6 +1602,41 @@ def _build_event_summary(
     else:
         event_batch_status = "complete"
 
+    failure_text = " ".join(
+        str(value).lower()
+        for record in video_batch_records
+        for value in (record.get("status_reason"),)
+        if value
+    )
+    report_reason_codes = {
+        str(report.get("reason_code"))
+        for report in video_reports
+        if report.get("reason_code")
+    }
+    if failed_video_ids:
+        if "missing_query_payload" in failure_text:
+            reason_code = MISSING_PAYLOAD
+        elif "invalid_video_query" in failure_text:
+            reason_code = INVALID_QUERY
+        elif INVALID_CITATION in report_reason_codes:
+            reason_code = INVALID_CITATION
+        elif "serper" in failure_text:
+            reason_code = PROVIDER_ERROR
+        else:
+            reason_code = VIDEO_FAILURES
+    elif pending_video_ids:
+        reason_code = PENDING_BATCHES
+    else:
+        reason_code = None
+
+    complete = (
+        summary_completeness == "complete"
+        and event_batch_status == "complete"
+        and not next_batch_required
+        and pending_video_ids == []
+        and failed_video_ids == []
+    )
+
     return {
         "event_summary_id": _event_summary_id(event_id, video_validation_ids),
         "event_id": event_id,
@@ -1590,6 +1654,10 @@ def _build_event_summary(
         "event_batch_status": event_batch_status,
         "videos_with_external_evidence": videos_with_external_evidence,
         "videos_without_external_evidence": videos_without_external_evidence,
+        "execution_status": EXECUTED,
+        "completeness_status": COMPLETE if complete else PARTIAL,
+        "validation_status": overall_status if complete else None,
+        "reason_code": reason_code,
         "overall_validation_status": overall_status,
         "overall_interpretation": overall_interpretation,
         "agreement_between_videos": agreement,
@@ -2156,6 +2224,17 @@ def run_rag_g2_hierarchical_from_config(
                     )
                     retrieval_status = "success" if external_evidence else "no_results"
                     all_external_evidence.extend(external_evidence)
+        else:
+            retrieval_status = "missing_payload"
+            batch_record["video_batch_status"] = "failed_retrieval"
+            batch_record["status_reason"] = "missing_query_payload"
+            manifest_errors.append(
+                {
+                    "type": "missing_query_payload",
+                    "video_id": video_id,
+                    "query_candidate_id": query_candidate_id,
+                }
+            )
 
         validation_payload = _build_video_validation_payload(
             validation_input=validation_input,
@@ -2261,8 +2340,9 @@ def run_rag_g2_hierarchical_from_config(
                     }
                 )
         if video_report is None:
-            batch_record["video_batch_status"] = "failed_validation"
-            batch_record["status_reason"] = "video_validation_generation_failed"
+            if batch_record["video_batch_status"] == "processed":
+                batch_record["video_batch_status"] = "failed_validation"
+                batch_record["status_reason"] = "video_validation_generation_failed"
             video_report = _error_video_report(
                 video_validation_id=video_validation_id,
                 event_id=config.event_id,
@@ -2287,6 +2367,29 @@ def run_rag_g2_hierarchical_from_config(
             batch_record["video_batch_status"] = "failed_retrieval"
             batch_record["status_reason"] = "serper_request_failed"
             video_report["video_batch_status"] = "failed_retrieval"
+        if batch_record["video_batch_status"] in {
+            "failed_retrieval",
+            "failed_validation",
+        }:
+            if video_report.get("validation_status") not in (None, ""):
+                video_report["model_validation_status"] = video_report.get(
+                    "validation_status"
+                )
+            status_reason = batch_record.get("status_reason")
+            if status_reason == "missing_query_payload":
+                reason_code = MISSING_PAYLOAD
+            elif status_reason == "invalid_video_query":
+                reason_code = INVALID_QUERY
+            elif status_reason == "serper_request_failed":
+                reason_code = PROVIDER_ERROR
+            else:
+                reason_code = video_report.get("reason_code") or VIDEO_FAILURES
+            video_report.update(
+                validation_status=None,
+                execution_status=FAILED,
+                completeness_status=PARTIAL,
+                reason_code=reason_code,
+            )
         video_reports.append(video_report)
         per_video_runs.append(
             {
@@ -2309,6 +2412,9 @@ def run_rag_g2_hierarchical_from_config(
                 "external_evidence_count": len(external_evidence),
                 "video_validation_id": video_validation_id,
                 "validation_status": video_report.get("validation_status"),
+                "execution_status": video_report.get("execution_status"),
+                "completeness_status": video_report.get("completeness_status"),
+                "reason_code": video_report.get("reason_code"),
                 "event_interpretation": video_report.get("event_interpretation"),
                 "external_evidence_assessment": video_report.get(
                     "external_evidence_assessment"
