@@ -270,7 +270,7 @@ class ExperimentalInputPolicyTests(unittest.TestCase):
     def test_complete_cyclic_activity_route_accepts_opt_in_policy(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         profile = json.loads((
-            repository / "configs" / "development" /
+            repository / "tests" / "fixtures" /
             "cyclic_activity_page_hinkley.json"
         ).read_text(encoding="utf-8"))
         comments = repository / "tests" / "fixtures" / "cyclic_runtime_comments.csv"

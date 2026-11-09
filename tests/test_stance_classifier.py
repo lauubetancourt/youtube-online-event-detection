@@ -568,7 +568,7 @@ class ClassifierEntrypointTests(unittest.TestCase):
             configured["polarization"]["mec"] = {}
             configured["signals"] = {"polarization": {
                 "proposition_id": "p",
-                "classification_run_id": "d1_c1_stance",
+                "classification_run_id": "example_stance",
                 "window": "1h",
                 "cadence": "15min",
                 "start_time_utc": "2026-04-20T14:00:00Z",
@@ -600,13 +600,13 @@ class ClassifierEntrypointTests(unittest.TestCase):
                     "--config", str(profile),
                     "--comments-path", str(source),
                     "--output-root", str(output),
-                    "--run-id", "d1_c1_stance",
+                    "--run-id", "example_stance",
                 ])
 
             prepared = json.loads(out.getvalue())
             self.assertEqual(prepared["execution_status"], "prepared_not_executed")
             self.assertEqual(prepared["input_mode"], "comments_csv")
-            self.assertEqual(prepared["classifier_run_id"], "d1_c1_stance")
+            self.assertEqual(prepared["classifier_run_id"], "example_stance")
             self.assertEqual(prepared["input_count"], 2)
             self.assertEqual(
                 (prepared["roots"], prepared["replies"], prepared["missing_parents"]),
@@ -662,11 +662,11 @@ class ClassifierEntrypointTests(unittest.TestCase):
                     "--comments-path", str(source),
                     "--execute",
                     "--output-root", str(output),
-                    "--run-id", "d1_c1_stance",
+                    "--run-id", "example_stance",
                 ])
 
             manifest = json.loads((output / "classifier_manifest.json").read_text())
-            self.assertEqual(manifest["classifier_run_id"], "d1_c1_stance")
+            self.assertEqual(manifest["classifier_run_id"], "example_stance")
             self.assertEqual(manifest["input_ref"], str(source.absolute()))
             self.assertEqual(
                 manifest["input_source_sha256"],

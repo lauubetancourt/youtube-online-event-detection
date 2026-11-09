@@ -52,7 +52,7 @@ class DetectionConfigurationTests(unittest.TestCase):
 
     def test_current_profile_resolves_both_detection_components(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        profile = repository_root / "configs/compatibility/cyclic_current.json"
+        profile = repository_root / "tests/fixtures/compatibility_cyclic.json"
         connector = resolve_cyclic_detection_connector_config(
             config_file=profile,
             base_dir=repository_root,
@@ -62,11 +62,13 @@ class DetectionConfigurationTests(unittest.TestCase):
             base_dir=repository_root,
         )
 
-        expected_simulation = (repository_root / LEGACY_OUTPUT_DIR).resolve(strict=False)
+        expected_simulation = (
+            repository_root / "experiments/example/cyclic_ingestion_simulation"
+        ).resolve(strict=False)
         self.assertEqual(connector.simulation_dir, expected_simulation)
         self.assertEqual(
             connector.canonical_dataset_path,
-            (repository_root / LEGACY_INPUT_PATH).resolve(strict=False),
+            (repository_root / "data/example/clean_comments.parquet").resolve(strict=False),
         )
         self.assertEqual(connector.mode, "detection_dry_run")
         self.assertEqual(baseline.simulation_dir, expected_simulation)

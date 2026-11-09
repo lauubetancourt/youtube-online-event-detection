@@ -15,13 +15,13 @@ from youtube_pipeline.entrypoints.common_cli import (
 class CommonRunCliTests(unittest.TestCase):
     def test_minimum_cli_requires_only_a_config_profile(self) -> None:
         options = parse_common_run_args(
-            ["--config", "configs/compatibility/cyclic_current.json"],
+            ["--config", "tests/fixtures/compatibility_cyclic.json"],
             description="test runner",
         )
 
         self.assertEqual(
             options.config_path,
-            Path("configs/compatibility/cyclic_current.json"),
+            Path("tests/fixtures/compatibility_cyclic.json"),
         )
         self.assertIsNone(options.run_id)
         self.assertIsNone(options.output_root)

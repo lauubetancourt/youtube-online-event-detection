@@ -8,9 +8,9 @@ from youtube_pipeline.configuration import load_run_config, resolve_run_config
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-PROFILE_PATH = REPOSITORY_ROOT / "configs/compatibility/cyclic_current.json"
+PROFILE_PATH = REPOSITORY_ROOT / "tests/fixtures/compatibility_cyclic.json"
 LEGACY_SIMULATION_DIR = Path(
-    "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
+    "experiments/example/cyclic_ingestion_simulation"
 )
 
 
@@ -26,8 +26,8 @@ class CurrentCyclicCompatibilityProfileTests(unittest.TestCase):
         self.assertEqual(run.artifacts.trace_level, "minimal")
 
         ingestion = run.simulation.ingestion
-        self.assertEqual(ingestion.simulation_run_id, "sim_42fc5b0f114b")
-        self.assertEqual(ingestion.input_path, "data/gold/clean_comments.parquet")
+        self.assertEqual(ingestion.simulation_run_id, "sim_example")
+        self.assertEqual(ingestion.input_path, "data/example/clean_comments.parquet")
         self.assertEqual(ingestion.output_dir, str(LEGACY_SIMULATION_DIR))
         self.assertEqual(ingestion.analysis_window_size_days, 3)
         self.assertEqual(ingestion.timezone, "America/Bogota")
@@ -50,7 +50,7 @@ class CurrentCyclicCompatibilityProfileTests(unittest.TestCase):
         self.assertEqual(signals.xiao_signal_name, "active_window_comment_count")
         self.assertEqual(
             signals.canonical_dataset_path,
-            "data/gold/clean_comments.parquet",
+            "data/example/clean_comments.parquet",
         )
         self.assertFalse(signals.run_xiao)
         self.assertFalse(signals.run_detection)
@@ -63,7 +63,7 @@ class CurrentCyclicCompatibilityProfileTests(unittest.TestCase):
         self.assertEqual(connector.max_cycles, 5)
         self.assertEqual(
             connector.canonical_dataset_path,
-            "data/gold/clean_comments.parquet",
+            "data/example/clean_comments.parquet",
         )
         self.assertFalse(connector.run_detection)
         self.assertFalse(connector.run_rag)
@@ -127,7 +127,7 @@ class CurrentCyclicCompatibilityProfileTests(unittest.TestCase):
 
         self.assertEqual(
             first.config.simulation.ingestion.input_path,
-            REPOSITORY_ROOT / "data/gold/clean_comments.parquet",
+            REPOSITORY_ROOT / "data/example/clean_comments.parquet",
         )
         self.assertEqual(
             first.config.simulation.ingestion.output_dir,

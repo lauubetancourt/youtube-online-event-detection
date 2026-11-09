@@ -167,7 +167,7 @@ class CyclicStateConfigurationTests(unittest.TestCase):
         )
 
         repository_root = Path(__file__).resolve().parents[1]
-        profile = repository_root / "configs/compatibility/cyclic_current.json"
+        profile = repository_root / "tests/fixtures/compatibility_cyclic.json"
         orchestration = resolve_cyclic_orchestrator_config(
             config_file=profile,
             base_dir=repository_root,
@@ -176,7 +176,9 @@ class CyclicStateConfigurationTests(unittest.TestCase):
             config_file=profile,
             base_dir=repository_root,
         )
-        expected = (repository_root / LEGACY_OUTPUT_DIR).resolve(strict=False)
+        expected = (
+            repository_root / "experiments/example/cyclic_ingestion_simulation"
+        ).resolve(strict=False)
         self.assertEqual(orchestration.simulation_dir, expected)
         self.assertEqual(adapter.simulation_dir, expected)
 
