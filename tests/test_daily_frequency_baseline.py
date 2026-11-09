@@ -5,11 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from youtube_pipeline.configuration import resolve_run_config, run_config_from_mapping
 from youtube_pipeline.daily_frequency_baseline import (
     CONFIGURED_COOLDOWN_POLICY,
     DEFAULT_COOLDOWN_POLICY,
     DailyFrequencyBaselineConfig,
     run_daily_frequency_baseline,
+)
+from youtube_pipeline.entrypoints.daily_frequency_baseline import (
+    load_legacy_baseline_config,
 )
 
 
@@ -226,19 +230,84 @@ class DailyFrequencyBaselineTests(unittest.TestCase):
             "use_vectorstore",
         ]:
             with self.assertRaises(ValueError):
-                DailyFrequencyBaselineConfig(**{flag: True}).validate()
+                DailyFrequencyBaselineConfig(
+                    simulation_dir="outputs/cyclic",
+                    **{flag: True},
+                ).validate()
 
-
-if __name__ == "__main__":
-    unittest.main()
     def test_defaults_disable_daily_cooldown(self) -> None:
-        config = DailyFrequencyBaselineConfig()
+        config = DailyFrequencyBaselineConfig(simulation_dir="outputs/cyclic")
 
         self.assertEqual(config.cooldown_cycles, 0)
         self.assertEqual(config.cooldown_policy, DEFAULT_COOLDOWN_POLICY)
 
     def test_positive_cooldown_is_still_supported_as_optional_config(self) -> None:
-        config = DailyFrequencyBaselineConfig(cooldown_cycles=1)
+        config = DailyFrequencyBaselineConfig(
+            simulation_dir="outputs/cyclic",
+            cooldown_cycles=1,
+        )
 
         self.assertEqual(config.cooldown_cycles, 1)
         self.assertEqual(config.cooldown_policy, CONFIGURED_COOLDOWN_POLICY)
+
+    def test_common_resolver_matches_legacy_baseline_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            common_dir = base / "common"
+            legacy_dir = base / "legacy"
+            self._write_artifacts(common_dir, [100, 100, 300])
+            self._write_artifacts(legacy_dir, [100, 100, 300])
+            parameters = {
+                "baseline_window_size_cycles": 2,
+                "warmup_cycles": 2,
+                "k_multiplier": 2.0,
+                "min_count": 100,
+                "min_delta": 50,
+                "min_pct_change": 0.5,
+            }
+            run = run_config_from_mapping(
+                {
+                    "identity": {"run_id": "run_daily_baseline"},
+                    "detection": {
+                        "daily_frequency": {
+                            "simulation_dir": "common",
+                            **parameters,
+                        }
+                    },
+                }
+            )
+            common_config = resolve_run_config(
+                run,
+                base_dir=base,
+            ).config.detection.daily_frequency
+            legacy_config = load_legacy_baseline_config(
+                None,
+                overrides={"simulation_dir": legacy_dir, **parameters},
+            )
+
+            common_summary = run_daily_frequency_baseline(common_config)
+            legacy_summary = run_daily_frequency_baseline(legacy_config)
+
+            for key in (
+                "detector_name",
+                "cycles_evaluated",
+                "warmup_cycles",
+                "evaluable_cycles",
+                "cooldown_cycles",
+                "cooldown_policy",
+                "events_detected",
+            ):
+                with self.subTest(key=key):
+                    self.assertEqual(common_summary[key], legacy_summary[key])
+            self.assertEqual(
+                (common_dir / "cycle_daily_frequency_scores.jsonl").read_text(
+                    encoding="utf-8"
+                ),
+                (legacy_dir / "cycle_daily_frequency_scores.jsonl").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

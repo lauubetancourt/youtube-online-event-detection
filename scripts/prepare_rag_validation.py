@@ -11,11 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from youtube_pipeline.rag_validation import (
-    RagValidationPrepareConfig,
-    load_rag_validation_config,
-    prepare_rag_validation_artifacts_from_config,
-)
+from youtube_pipeline.entrypoints.non_daily_rag import resolve_rag_validation_config
+from youtube_pipeline.rag_validation import prepare_rag_validation_artifacts_from_config
 
 
 def _read_json_file(path: str | None) -> dict[str, Any]:
@@ -107,11 +104,12 @@ def main() -> None:
         overrides["validation_params"] = validation_params
 
     try:
-        if args.config_file:
-            config = load_rag_validation_config(args.config_file, overrides=overrides)
-        else:
-            config = RagValidationPrepareConfig.from_mapping(overrides)
-    except ValueError as exc:
+        _, config = resolve_rag_validation_config(
+            config_file=args.config_file,
+            overrides=overrides,
+            base_dir=Path.cwd(),
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
         parser.error(str(exc))
 
     summary = prepare_rag_validation_artifacts_from_config(config)

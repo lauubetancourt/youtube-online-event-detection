@@ -4,6 +4,8 @@ import html
 import re
 import unicodedata
 from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
@@ -45,6 +47,28 @@ DEFAULT_SLANG_MAP = {
     "xd": "emoji_laugh",
     "jajaja": "risa",
 }
+
+
+@dataclass(frozen=True)
+class CleaningConfig:
+    """Input, output, and existing cleaning parameters for one preparation stage."""
+
+    input_path: str | Path
+    output_path: str | Path
+    raw_text_col: str = "text"
+    timestamp_col: str = "published_at"
+    keep_spam: bool = False
+
+    @classmethod
+    def from_mapping(cls, payload: dict[str, object]) -> "CleaningConfig":
+        config_payload = payload.get("cleaning", payload)
+        if not isinstance(config_payload, dict):
+            raise ValueError("Cleaning config must be an object.")
+        allowed = set(cls.__dataclass_fields__)
+        unknown = sorted(set(config_payload) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown cleaning config fields: {unknown}")
+        return cls(**config_payload)
 
 
 def _emoji_tokenize(text: str) -> tuple[str, int]:
@@ -276,6 +300,46 @@ def clean_comments_dataframe(
             raise KeyError(f"Missing required columns after cleaning: {missing}")
 
     return out.reset_index(drop=True)
+
+
+def _read_cleaning_input(path: str | Path) -> pd.DataFrame:
+    source = Path(path)
+    if source.is_dir() or source.suffix.lower() == ".parquet":
+        return pd.read_parquet(source)
+    if source.suffix.lower() == ".csv":
+        return pd.read_csv(source)
+    raise ValueError(f"Unsupported file format: {source}")
+
+
+def _write_cleaning_output(df: pd.DataFrame, path: str | Path) -> Path:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.suffix.lower() == ".csv":
+        df.to_csv(output, index=False)
+    else:
+        df.to_parquet(output, index=False)
+    return output
+
+
+def clean_comments_from_config(config: CleaningConfig) -> Path:
+    """Execute the existing cleaning behavior from its component configuration."""
+
+    if not isinstance(config, CleaningConfig):
+        raise TypeError("config must be CleaningConfig.")
+    comments_df = _read_cleaning_input(config.input_path)
+    timestamp_col = config.timestamp_col
+    if (
+        timestamp_col not in comments_df.columns
+        and "event_time_utc" in comments_df.columns
+    ):
+        timestamp_col = "event_time_utc"
+    clean_df = clean_comments_dataframe(
+        comments_df,
+        raw_text_col=config.raw_text_col,
+        timestamp_col=timestamp_col,
+        keep_spam=config.keep_spam,
+    )
+    return _write_cleaning_output(clean_df, config.output_path)
 
 
 def top_emoji_tokens(df: pd.DataFrame, text_col: str = "text_clean", n: int = 20) -> pd.Series:

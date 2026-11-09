@@ -1,0 +1,12 @@
+{
+  "topic_id": "c1_ivan_cepeda",
+  "topic_description": "Nivel de apoyo hacia Iván Cepeda en las elecciones presidenciales de Colombia de 2026",
+  "stance": {
+    "proposition_id": "C1",
+    "proposition": "¿Cuál es su nivel de apoyo hacia el candidato presidencial Iván Cepeda?",
+    "context": "Las elecciones presidenciales de Colombia de 2026 se desarrollan en un contexto de alta polarización política. El debate público ha estado marcado por discusiones en torno a propuestas del gobierno actual, liderado por Gustavo Petro, incluyendo iniciativas promovidas en las distintas reformas propuestas por el gobierno. En este escenario, distintos sectores políticos —de izquierda, centro y derecha— presentan candidatos con trayectorias diversas, mientras que temas como la economía, la seguridad, las reformas sociales y la institucionalidad ocupan un lugar central en la agenda nacional.",
+    "context_version": "1",
+    "prompt_id": "comment_stance_likert5",
+    "prompt_version": "1"
+  }
+}

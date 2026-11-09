@@ -6,10 +6,15 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from pandas.testing import assert_frame_equal
 
+from youtube_pipeline.configuration import resolve_run_config, run_config_from_mapping
 from youtube_pipeline.daily_rag_sidecars import (
     DailyRagSidecarBuildConfig,
     write_daily_rag_sidecar_artifacts_from_config,
+)
+from youtube_pipeline.entrypoints.daily_rag_sidecars import (
+    resolve_daily_rag_sidecar_config,
 )
 
 
@@ -235,7 +240,79 @@ class DailyRagSidecarTests(unittest.TestCase):
             "run_g2",
         ]:
             with self.assertRaises(ValueError):
-                DailyRagSidecarBuildConfig(**{flag: True}).validate()
+                DailyRagSidecarBuildConfig(
+                    daily_events_path="events.jsonl",
+                    output_dir="outputs/sidecars",
+                    comments_path="comments.parquet",
+                    cycle_window_inventory_path="window.csv",
+                    **{flag: True},
+                ).validate()
+
+    def test_common_resolver_preserves_legacy_sidecar_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            inputs = self._write_inputs(base)
+            common_output = base / "common"
+            legacy_output = base / "legacy"
+            component_payload = {
+                "daily_events_path": inputs.daily_events_path,
+                "output_dir": common_output,
+                "comments_path": inputs.comments_path,
+                "cycle_window_inventory_path": inputs.cycle_window_inventory_path,
+                "daily_scores_path": None,
+                "daily_detector_manifest_path": None,
+                "cycle_signal_series_path": None,
+                "cycle_stateful_context_path": None,
+                "max_comments_per_context_unit": 2,
+                "run_id": "run_sidecars_compatibility",
+            }
+            run = run_config_from_mapping(
+                {
+                    "identity": {"run_id": "run_sidecars_compatibility"},
+                    "rag": {"daily_sidecars": component_payload},
+                }
+            )
+            common = resolve_run_config(
+                run,
+                base_dir=base,
+            ).config.rag.daily_sidecars
+            legacy = resolve_daily_rag_sidecar_config(
+                config_file=None,
+                overrides={
+                    **component_payload,
+                    "output_dir": legacy_output,
+                    "run_id": "run_sidecars_compatibility",
+                },
+                base_dir=base,
+            )
+
+            common_summary = write_daily_rag_sidecar_artifacts_from_config(common)
+            legacy_summary = write_daily_rag_sidecar_artifacts_from_config(legacy)
+
+            comparable_keys = {
+                "run_id",
+                "artifact_version",
+                "events_processed",
+                "alert_evidence_comments",
+                "validation_context_comments",
+                "validation_status",
+                "future_leak_count",
+            }
+            self.assertEqual(
+                {key: common_summary[key] for key in comparable_keys},
+                {key: legacy_summary[key] for key in comparable_keys},
+            )
+            for artifact in (
+                "daily_event_comment_inventory.csv",
+                "daily_event_video_map.csv",
+                "daily_event_thread_map.csv",
+                "daily_context_unit_comment_map.csv",
+            ):
+                with self.subTest(artifact=artifact):
+                    assert_frame_equal(
+                        pd.read_csv(common_output / artifact),
+                        pd.read_csv(legacy_output / artifact),
+                    )
 
 
 if __name__ == "__main__":

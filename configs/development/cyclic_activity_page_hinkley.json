@@ -1,0 +1,55 @@
+{
+  "identity": {
+    "run_id": "development_cyclic_activity_page_hinkley"
+  },
+  "artifacts": {
+    "run_mode": "development",
+    "trace_level": "minimal"
+  },
+  "simulation": {
+    "ingestion": {
+      "input_path": "tests/fixtures/cyclic_runtime_comments.csv",
+      "output_dir": "experiments/development/cyclic_activity_page_hinkley",
+      "collection_start_date_local": "2026-06-01",
+      "collection_end_date_local": "2026-06-02",
+      "analysis_window_size_days": 2,
+      "simulation_run_id": "sim_development_activity_page_hinkley",
+      "rag_mode": "disabled",
+      "dry_run": true,
+      "notes": "Synthetic plumbing profile; not a methodological experiment"
+    },
+    "orchestration": {
+      "simulation_dir": "experiments/development/cyclic_activity_page_hinkley"
+    },
+    "stateful_adapter": {
+      "simulation_dir": "experiments/development/cyclic_activity_page_hinkley"
+    }
+  },
+  "signals": {
+    "activity": {
+      "signal_id": "comment_count_event_window_120s_step_30s",
+      "metric": "comment_count",
+      "source": "prepared_comments",
+      "scope": "selected_comment_stream",
+      "unit": "comments",
+      "window": "120s",
+      "cadence": "30s",
+      "time_basis": "event_time_utc",
+      "timezone": "UTC",
+      "interval_policy": "closed"
+    }
+  },
+  "detection": {
+    "activity_route": {
+      "signal_id": "comment_count_event_window_120s_step_30s",
+      "detector_id": "page_hinkley"
+    },
+    "connector": {
+      "simulation_dir": "experiments/development/cyclic_activity_page_hinkley",
+      "canonical_dataset_path": "tests/fixtures/cyclic_runtime_comments.csv",
+      "mode": "activity_detection_runtime",
+      "max_cycles": 2
+    },
+    "page_hinkley": {}
+  }
+}

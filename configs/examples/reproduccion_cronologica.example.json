@@ -1,0 +1,96 @@
+{
+  "identity": {
+    "run_id": "ejemplo_reproduccion"
+  },
+  "topic_profile": {
+    "topic_id": "tema_ejemplo",
+    "topic_description": "Tema ilustrativo que debe reemplazarse antes de clasificar posturas.",
+    "stance": {
+      "proposition_id": "proposicion_ejemplo",
+      "proposition": "La propuesta del tema debe aprobarse.",
+      "context": "Contexto ilustrativo que debe reemplazarse por el del tema analizado."
+    }
+  },
+  "data": {
+    "local_files": {
+      "videos_path": "data/mi_extraccion/videos_preliminares.csv",
+      "comments_path": "data/mi_extraccion/comments.csv",
+      "data_root": "data/mi_extraccion"
+    },
+    "experimental_input": {}
+  },
+  "simulation": {
+    "causal_end_to_end": {
+      "start_utc": "2026-01-01T00:00:00Z",
+      "end_utc": "2026-01-02T00:00:00Z",
+      "step": "5min",
+      "output_dir": "outputs/ejemplo_reproduccion",
+      "stance_artifact_path": "outputs/stances/ejemplo_posturas/comment_stances.jsonl",
+      "stance_manifest_path": "outputs/stances/ejemplo_posturas/classifier_manifest.json",
+      "parameter_status": "TEST_ONLY"
+    }
+  },
+  "signals": {
+    "activity": {
+      "signal_id": "comment_count_event_window_900s_step_300s",
+      "metric": "comment_count",
+      "source": "prepared_comments",
+      "scope": "selected_comment_stream",
+      "unit": "comments",
+      "window": "15min",
+      "cadence": "5min",
+      "time_basis": "event_time_utc",
+      "timezone": "UTC",
+      "interval_policy": "closed"
+    },
+    "polarization": {
+      "proposition_id": "proposicion_ejemplo",
+      "classification_run_id": "ejemplo_posturas",
+      "window": "30min",
+      "cadence": "10min",
+      "start_time_utc": "2026-01-01T00:00:00Z",
+      "end_time_utc": "2026-01-02T00:00:00Z",
+      "enabled_measures": ["mec"]
+    }
+  },
+  "detection": {
+    "routes": {
+      "comment_count_event_window_900s_step_300s": {"detector_id": "page_hinkley"},
+      "polarization_mec": {"detector_id": "kswin"}
+    },
+    "gap_policy": {},
+    "page_hinkley": {},
+    "kswin": {}
+  },
+  "association": {
+    "tolerance": "2min",
+    "parameter_status": "TEST_ONLY"
+  },
+  "polarization": {
+    "classifier": {},
+    "runtime": {
+      "input_schema": "silver_comments_v1",
+      "source_role": "CAUSAL_MINIMAL_V1"
+    },
+    "mec": {}
+  },
+  "rag": {
+    "candidate_evidence": {
+      "source_path": "data/mi_extraccion/comments.csv",
+      "output_dir": "outputs/ejemplo_reproduccion/candidate_evidence",
+      "lookback": "10min",
+      "lookahead": "0s",
+      "mode": "immediate_causal",
+      "parameter_status": "TEST_ONLY"
+    },
+    "candidate_validation": {
+      "candidates_path": "outputs/ejemplo_reproduccion/event_candidates.jsonl",
+      "evidence_dir": "outputs/ejemplo_reproduccion/candidate_evidence",
+      "output_dir": "outputs/ejemplo_reproduccion/candidate_rag",
+      "candidate_id": "runtime-placeholder"
+    }
+  },
+  "artifacts": {
+    "run_mode": "development"
+  }
+}

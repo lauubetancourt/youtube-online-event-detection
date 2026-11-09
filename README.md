@@ -1,187 +1,99 @@
-# YouTube Data Extraction
+# Detección de eventos en YouTube
 
-This project extracts and analyzes YouTube video and comment data with the YouTube Data API.
+Este repositorio contiene un prototipo para la detección de eventos en YouTube. Su enfoque de detección en línea combina señales de actividad y medidas de polarización para detectar cambios estadísticos y generar eventos candidatos con la información disponible en cada corte temporal. Después examina esos candidatos mediante dos mecanismos que emplean modelos de lenguaje: la evaluación del patrón conversacional (G-1) y el contraste con noticias y otras fuentes públicas (G-2).
 
-## Features
+Los pasos siguientes explican cómo obtener o preparar los datos, configurar el análisis y ejecutar una reproducción cronológica en su equipo.
 
-- Search and filter videos by topic, date range, views, and comments.
-- Export batch snapshots in JSONL and Parquet.
-- Clean noisy comments while preserving emotional signals for polarization analysis.
-- Replay historical comments as a simulated stream with Streamz.
+## Requisitos
 
-## Project Structure
-
-- `notebooks/`: End-to-end notebooks.
-- `youtube_pipeline/`: Reusable modules for extraction, storage, cleaning, and playback.
-- `scripts/`: Audit and reporting helpers used in exploratory experiments.
-- `data/`: Batch and processed datasets.
-- `experiments/`: Detection experiment outputs and summaries.
-- `docs/pipeline_architecture.md`: Current pipeline architecture and phase boundaries.
-- `docs/data_contracts.md`: Data fields, temporal units, lineage, and compatibility rules.
-- `docs/rag_validation_readiness.md`: Future RAG validation contract and evidence requirements.
-- `docs/rag_artifact_audit.md`: RAG-0 inventory of current artifacts, lineage gaps, and PoC evidence.
-- `docs/rag_event_evidence_contract.md`: RAG-1 proposed event-evidence contract for future validation.
-- `docs/rag_poc_integration.md`: Executable integration boundary for the current RAG PoC notebook.
-- `docs/regression_verification.md`: Regression checks and evidence after refinement.
-
-## Setup
-
-The project environment is pinned to Python 3.12.13 in `.python-version`.
-This keeps the current detection pipeline and the RAG PoC compatible with the
-same dependency set, including `numpy==1.26.4` and `chromadb==0.5.5`.
+Necesita Python 3.14.3, indicado en `.python-version`. Desde la raíz del repositorio, cree un entorno virtual e instale las dependencias:
 
 ```bash
-python3.12 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-## Playback Experiments
-
-The runtime timestamp field is `event_time_utc` in UTC. New numeric timestamp
-fields use Unix epoch seconds, for example `event_time_unix_s`; legacy
-`*_unix_ms` fields are accepted only for compatibility with existing artifacts.
-
-The `playback` and `all` commands expose two different window configurations:
-
-- `--window-size`: snapshot window used by `build_event_time_window_stream`.
-- `--trigger-window-size`: detector sliding window used by `XiaoEMATriggerDetector`.
-- `--trigger-slide-interval`: detector step size.
-- `--trigger-slow-window`: detector slow EMA horizon.
-- `--trigger-cooldown`: detector lock period after a trigger.
-- `--detector`: detector implementation to use. The provisional default is `xiao_ema`.
-- `--detector-config-file`: optional JSON file with detector name and parameters.
-
-Example:
+Copie el archivo de ejemplo y complete solo las claves de los servicios que vaya a utilizar:
 
 ```bash
-python youtube_pipeline/run_pipeline.py playback \
-  --input-path data/gold/clean_comments.parquet \
-  --output-snapshots data/gold/snapshots_log3_variant.csv \
-  --window-size 20min \
-  --trigger-threshold 1.5 \
-  --trigger-min-volume 15 \
-  --trigger-window-size 120s \
-  --trigger-slide-interval 30s \
-  --trigger-slow-window 10min \
-  --trigger-cooldown 3min \
-  --detector xiao_ema
+cp .env.example .env
 ```
 
-## RAG Evidence Builder
+Obtenga `YOUTUBE_API_KEY` en [Google Cloud](https://developers.google.com/youtube/data/guides/authentication), tras habilitar YouTube Data API v3; `OPENAI_API_KEY` en la [plataforma de OpenAI](https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key); y `SERPER_API_KEY` en [Serper](https://serper.dev/). La primera se usa para extraer datos, la segunda para clasificar posturas y validar candidatos, y la tercera para buscar fuentes públicas. El archivo `.env` es local y está excluido de Git.
 
-The RAG evidence builder is a non-invasive helper. It reads existing experiment
-outputs and writes separate RAG-preparation artifacts without changing
-playback, monitoring, detection, thresholds, metrics, or existing output files.
+## 1. Elegir u obtener los datos
 
-Example:
+Puede partir de archivos propios de comentarios y videos si cumplen los [requisitos de entrada](docs/causal_end_to_end_replay.md#entrada-local). Si necesita obtenerlos de YouTube, ejecute una extracción:
 
 ```bash
-.venv/bin/python scripts/build_rag_event_evidence.py \
-  --comments-path data/gold/clean_comments.parquet \
-  --trigger-comment-map-path experiments/xiao/media/log_3/trigger_comment_map.csv \
-  --snapshots-path experiments/xiao/media/log_3/snapshots.csv \
-  --output-dir experiments/xiao/media/log_3/rag_evidence \
-  --detector-name xiao_ema \
-  --snapshot-context window
+python -m youtube_pipeline.run_pipeline extract \
+  --query 'TEMA' --published-after 'AAAA-MM-DDT00:00:00Z' \
+  --published-before 'AAAA-MM-DDT00:00:00Z' \
+  --min-views 0 --min-comments 0 \
+  --data-root data/mi_extraccion --save-legacy-csv
 ```
 
-It writes `run_manifest.json`, `event_candidates.csv`,
-`event_comment_map.csv`, `event_signal_snapshot_map.csv`,
-`event_evidence_packages.jsonl`, and `rag_evidence_summary.json`.
+Reemplace `TEMA` por los términos de búsqueda y las fechas de ejemplo por el inicio y el fin del período que desea consultar. El comando busca videos y extrae sus comentarios. Los mínimos de vistas y comentarios están puestos en cero para que el ejemplo no descarte videos por esos criterios. Si desea filtrarlos, cambie esos valores. Los filtros se aplican después de la búsqueda. La extracción conserva además topes por defecto de 500 videos y 5 000 comentarios por video, ajustables con `--max-results` y `--max-comments`. Consulte las demás opciones con `python -m youtube_pipeline.run_pipeline extract --help`.
 
-The same helper can read a JSON config:
+Al terminar, encontrará `data/mi_extraccion/comments.csv` y `data/mi_extraccion/videos_preliminares.csv`, además de los archivos Bronze (JSONL) y Silver (Parquet). Los dos CSV sirven como entrada para los pasos siguientes. Si realiza otra extracción, use otro `--data-root` para conservar los archivos de cada lectura por separado.
+
+## 2. Preparar y configurar el análisis
+
+El análisis utiliza el CSV de comentarios y el archivo de videos de la misma extracción. Si parte de archivos propios, compruebe que los comentarios tengan los campos necesarios y que sus `video_id` correspondan a los del archivo de videos. La [guía de entrada](docs/causal_end_to_end_replay.md#entrada-local) indica las columnas y formatos admitidos.
+
+Copie el [perfil de ejemplo](configs/examples/reproduccion_cronologica.example.json) para crear su configuración local:
 
 ```bash
-.venv/bin/python scripts/build_rag_event_evidence.py \
-  --config-file path/to/rag_evidence_config.json
+mkdir -p configs/local
+cp configs/examples/reproduccion_cronologica.example.json configs/local/mi_analisis.json
 ```
 
-Config shape:
+En `configs/local/mi_analisis.json`, ajuste el tema y su proposición, las rutas de los datos y los tiempos de inicio y fin. El inicio de la reproducción y el de polarización deben quedar antes del primer comentario del CSV; ambos finales, después del último. El clasificador procesa todo el CSV y la reproducción exige las posturas de ese mismo conjunto. Si desea analizar solo un período, prepare primero un CSV con los comentarios de ese período y úselo tanto para clasificar como para reproducir. Revise también ventanas, cadencias, detectores y rutas de salida: los valores del ejemplo son ilustrativos, no una configuración recomendada. El perfil local está excluido de Git. La extracción no lo crea automáticamente. La [guía de configuración](configs/README.md) explica cómo se relacionan sus campos.
 
-```json
-{
-  "rag_evidence": {
-    "comments_path": "data/gold/clean_comments.parquet",
-    "trigger_comment_map_path": "experiments/xiao/media/log_3/trigger_comment_map.csv",
-    "snapshots_path": "experiments/xiao/media/log_3/snapshots.csv",
-    "output_dir": "experiments/xiao/media/log_3/rag_evidence",
-    "detector_name": "xiao_ema",
-    "snapshot_context": "window"
-  }
-}
-```
-
-## RAG Validation Preparation
-
-The RAG validation preparation helper is also non-invasive. It consumes
-`event_evidence_packages.jsonl` and creates validation tasks, retrieval
-questions, query placeholders, an empty external-evidence table, and pending
-validation results. It does not call LLMs, embeddings, vector stores, external
-APIs, or news sources.
-
-Example:
+La reproducción necesita posturas clasificadas. Puede obtenerlas con el clasificador del repositorio usando el mismo perfil. Indique en `--run-id` el valor que haya puesto en `signals.polarization.classification_run_id` y use el mismo CSV que figura en `data.local_files.comments_path`. Revise primero el plan y después ejecute:
 
 ```bash
-.venv/bin/python scripts/prepare_rag_validation.py \
-  --evidence-packages-path experiments/xiao/media/log_3/rag_evidence/event_evidence_packages.jsonl \
-  --output-dir experiments/xiao/media/log_3/rag_validation \
-  --validator manual_pending \
-  --query-language es \
-  --max-videos-per-event 5
+python scripts/run_comment_stance_classifier.py \
+  --config configs/local/mi_analisis.json --base-dir . \
+  --run-id ejemplo_posturas --comments-path data/mi_extraccion/comments.csv \
+  --output-root outputs/stances/ejemplo_posturas --dry-run
+python scripts/run_comment_stance_classifier.py \
+  --config configs/local/mi_analisis.json --base-dir . \
+  --run-id ejemplo_posturas --comments-path data/mi_extraccion/comments.csv \
+  --output-root outputs/stances/ejemplo_posturas --execute
 ```
 
-It writes `rag_validation_manifest.json`, `rag_validation_tasks.csv`,
-`rag_retrieval_questions.csv`, `rag_queries.csv`, `external_evidence.csv`,
-`validation_results.csv`, and `rag_validation_summary.json`.
+Los comandos usan las rutas e identificadores del ejemplo. Si los cambia en el perfil, cámbielos también aquí. La primera orden solo muestra el plan. La segunda consulta al modelo y guarda `comment_stances.jsonl` y `classifier_manifest.json` en `outputs/stances/ejemplo_posturas`.
 
-## RAG PoC Validation
+En el perfil, `simulation.causal_end_to_end.stance_artifact_path` y `stance_manifest_path` deben apuntar a esos dos archivos. El programa comprueba que correspondan al CSV, al tema y al identificador de clasificación configurados. Las posturas se calculan **antes** de la reproducción, pero solo entran al análisis cuando se incorpora su comentario.
 
-The current RAG proof of concept from
-`.agents/examples/structured-rag-pdf/triggers_validation.ipynb` is integrated as
-a posterior phase. It preserves the notebook's `trigger_time + video_id` unit,
-prompts, OpenAI model, Serper query behavior, Chroma vector stores, cache file
-names, and audit output schema.
+## 3. Reproducir los cortes temporales
 
-Dry-run contract check:
+Cuando estén listos los archivos, las posturas y el perfil, revise el plan de reproducción:
 
 ```bash
-.venv/bin/python scripts/run_rag_poc_validation.py \
-  --trigger-comment-map-path experiments/xiao/media/log_3/trigger_comment_map.csv \
-  --event-comment-map-path experiments/xiao/media/log_3/rag_evidence/event_comment_map.csv \
-  --output-dir experiments/xiao/media/log_3/rag_poc \
-  --dry-run
+python scripts/run_causal_end_to_end.py --config configs/local/mi_analisis.json --base-dir .
 ```
 
-Full PoC execution:
+Este comando muestra el intervalo, el paso del reloj simulado y el directorio de salida, sin procesar comentarios ni llamar a servicios externos. Si el plan es el esperado, elija una de estas dos formas de ejecutar el análisis:
 
 ```bash
-.venv/bin/python scripts/run_rag_poc_validation.py \
-  --trigger-comment-map-path experiments/xiao/media/log_3/trigger_comment_map.csv \
-  --event-comment-map-path experiments/xiao/media/log_3/rag_evidence/event_comment_map.csv \
-  --output-dir experiments/xiao/media/log_3/rag_poc
+# Construir señales, alertas, candidatos y evidencia interna:
+python scripts/run_causal_end_to_end.py --config configs/local/mi_analisis.json --base-dir . \
+  --execute --skip-rag
+
+# Incluir también G-1 y G-2:
+python scripts/run_causal_end_to_end.py --config configs/local/mi_analisis.json --base-dir . --execute
 ```
 
-The full execution writes `queries_df.csv`, `noticias_df.csv`,
-`auditoria_df.csv`, `vectorstore_comentarios/`, `vectorstore_noticias/`, and
-non-functional traceability files. It may call OpenAI and Serper if cache files
-are absent.
+La opción `--skip-rag` termina después de construir la evidencia interna. La otra también ejecuta G-1 y G-2 cuando hay evidencia para evaluarlos y requiere acceso a los servicios indicados en el perfil. Cada ejecución nueva necesita un directorio de salida vacío. Si desea probar las dos opciones, haga una copia del perfil y asigne a cada ejecución un `identity.run_id` y un `simulation.causal_end_to_end.output_dir` diferentes.
 
-## RAG Artifact Verification
+Si una ejecución se interrumpe, puede repetir su comando con `--resume` para continuar con la misma configuración y los mismos datos. En el directorio de salida encontrará `resolved_config.json`, `causal_replay_manifest.json` y los resultados de las etapas ejecutadas. La [guía de reproducción](docs/causal_end_to_end_replay.md) explica cómo consultar esos archivos.
 
-The RAG artifact verifier checks evidence and validation-preparation outputs
-without changing them. It verifies required files, required columns, event ID
-alignment, per-event comment counts, temporal bounds, Unix-second timestamp
-consistency, pending validation rows, and summary counts.
+La reproducción incorpora en cortes sucesivos los comentarios que ya estaban en el conjunto preparado. No consulta de nuevo la API de YouTube ni establece una latencia máxima de detección.
 
-Example:
+## Guías de consulta
 
-```bash
-.venv/bin/python scripts/verify_rag_artifacts.py \
-  --evidence-dir experiments/xiao/media/log_3/rag_evidence \
-  --validation-dir experiments/xiao/media/log_3/rag_validation \
-  --report-path experiments/xiao/media/log_3/rag_validation/rag_artifact_verification_report.json
-```
-
-The script only reads artifacts. It does not run detection, retrieval,
-generation, embeddings, vector stores, external APIs, or validation decisions.
+- [Configuración de ejecuciones](configs/README.md): explica las secciones de los perfiles JSON y cómo se relacionan la clasificación y la reproducción.
+- [Entrada y reproducción cronológica](docs/causal_end_to_end_replay.md): detalla los archivos de entrada, las salidas y los límites del recorrido.

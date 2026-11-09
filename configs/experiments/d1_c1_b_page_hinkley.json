@@ -1,0 +1,166 @@
+{
+  "identity": {
+    "run_id": "d1_c1_b_page_hinkley"
+  },
+  "topic_profile": "c1_ivan_cepeda",
+  "data": {
+    "local_files": {
+      "videos_path": "data/silver/experiments/d1/videos_preliminares.csv",
+      "comments_path": "data/silver/experiments/d1/d1.csv",
+      "data_root": "data"
+    },
+    "experimental_input": {
+      "policy_id": "causal_minimal_v1",
+      "source": "silver",
+      "exact_comment_id_dedup": true,
+      "semantic_filtering": false
+    }
+  },
+  "simulation": {
+    "causal_end_to_end": {
+      "start_utc": "2026-02-08T17:05:53Z",
+      "end_utc": "2026-04-21T18:09:15Z",
+      "step": "1min",
+      "output_dir": "outputs/causal_end_to_end/d1_c1_b_page_hinkley",
+      "stance_artifact_path": "outputs/stances/d1_c1_stance/comment_stances.jsonl",
+      "stance_manifest_path": "outputs/stances/d1_c1_stance/classifier_manifest.json",
+      "parameter_status": "DEVELOPMENT_NOT_CALIBRATED",
+      "clock_policy_id": "fixed_step_v1",
+      "stance_mode": "precomputed_stances_v1"
+    }
+  },
+  "signals": {
+    "activity": {
+      "signal_id": "comment_count_event_window_900s_step_180s",
+      "metric": "comment_count",
+      "source": "prepared_comments",
+      "scope": "selected_comment_stream",
+      "unit": "comments",
+      "window": "15min",
+      "cadence": "3min",
+      "time_basis": "event_time_utc",
+      "timezone": "UTC",
+      "interval_policy": "closed"
+    },
+    "polarization": {
+      "proposition_id": "C1",
+      "classification_run_id": "d1_c1_stance",
+      "window": "90min",
+      "cadence": "15min",
+      "start_time_utc": "2026-02-08T17:05:53Z",
+      "end_time_utc": "2026-04-21T18:09:15Z",
+      "enabled_measures": [
+        "esteban_ray",
+        "emd_pol",
+        "mec"
+      ],
+      "interval_policy": "closed",
+      "time_basis": "event_time_utc",
+      "timezone": "UTC",
+      "distribution_policy_id": "likert5_author_latest_classified_v1"
+    }
+  },
+  "detection": {
+    "routes": {
+      "comment_count_event_window_900s_step_180s": {
+        "detector_id": "page_hinkley"
+      },
+      "polarization_esteban_ray": {
+        "detector_id": "page_hinkley"
+      },
+      "polarization_emd_pol": {
+        "detector_id": "page_hinkley"
+      },
+      "polarization_mec": {
+        "detector_id": "page_hinkley"
+      }
+    },
+    "gap_policy": {
+      "policy_id": "preserve_state_v1"
+    },
+    "page_hinkley": {
+      "min_instances": 30,
+      "delta": 0.005,
+      "threshold": 50.0,
+      "alpha": 0.9999,
+      "mode": "both"
+    },
+    "adwin": {
+      "delta": 0.002,
+      "clock": 32,
+      "max_buckets": 5,
+      "min_window_length": 5,
+      "grace_period": 10
+    },
+    "kswin": {
+      "alpha": 0.005,
+      "window_size": 100,
+      "stat_size": 30,
+      "seed": 42
+    }
+  },
+  "association": {
+    "policy_id": "bounded_temporal_clusters_v1",
+    "tolerance": "5min",
+    "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
+  },
+  "polarization": {
+    "classifier": {
+      "model": "gpt-4.1-2025-04-14",
+      "max_concurrency": 1,
+      "retry_policy": {
+        "max_attempts": 3,
+        "initial_delay_seconds": 1.0,
+        "max_delay_seconds": 60.0,
+        "jitter_seconds": 1.0
+      },
+      "temperature": 0.0,
+      "top_p": 0.9,
+      "max_completion_tokens": 128,
+      "request_timeout_seconds": 30.0
+    },
+    "runtime": {
+      "input_schema": "silver_comments_v1",
+      "source_role": "CAUSAL_MINIMAL_V1"
+    },
+    "esteban_ray": {
+      "alpha": 0.8
+    },
+    "emd_pol": {},
+    "mec": {
+      "alpha": 2.0,
+      "beta": 1.15
+    }
+  },
+  "rag": {
+    "candidate_evidence": {
+      "source_path": "data/silver/experiments/d1/d1.csv",
+      "output_dir": "outputs/causal_end_to_end/d1_c1_b_page_hinkley/candidate_evidence",
+      "lookback": "10min",
+      "lookahead": "0s",
+      "mode": "immediate_causal",
+      "parameter_status": "DEVELOPMENT_NOT_CALIBRATED",
+      "policy_id": "candidate_evidence_v1",
+      "time_anchor": "reference_time_utc",
+      "source_layer": "silver",
+      "input_policy_id": "causal_minimal_v1",
+      "max_comments_per_context_unit": 25
+    },
+    "candidate_validation": {
+      "candidates_path": "outputs/causal_end_to_end/d1_c1_b_page_hinkley/event_candidates.jsonl",
+      "evidence_dir": "outputs/causal_end_to_end/d1_c1_b_page_hinkley/candidate_evidence",
+      "output_dir": "outputs/causal_end_to_end/d1_c1_b_page_hinkley/candidate_rag",
+      "candidate_id": "runtime-placeholder",
+      "g1_max_approx_tokens": 16000
+    },
+    "g2_gate": {
+      "policy_id": "g1_gate_v1",
+      "mode": "OFF",
+      "parameter_status": "DEVELOPMENT_NOT_CALIBRATED"
+    }
+  },
+  "artifacts": {
+    "run_mode": "development",
+    "trace_level": "minimal"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "output_dir": "outputs/g1_gate_context_experiment",
+  "consumer_dir": "experiments/xiao/media/log_3/rag_consumer",
+  "existing_g1_dir": "experiments/xiao/media/log_3/rag_generation_g1",
+  "g2_dir": "experiments/xiao/media/log_3/rag_generation_g2_hierarchical_batch_auto_lot1",
+  "model": "gpt-5-mini",
+  "baseline_call_cap": 8,
+  "budget_call_cap": 12,
+  "budgets": [
+    {"name": "B50", "estimated_tokens": 5544},
+    {"name": "B75", "estimated_tokens": 9750},
+    {"name": "B90", "estimated_tokens": 10894}
+  ],
+  "sample_size": 4,
+  "planned_token_multiplier": 2.5
+}

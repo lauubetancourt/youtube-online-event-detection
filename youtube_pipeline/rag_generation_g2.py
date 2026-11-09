@@ -13,6 +13,21 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from youtube_pipeline.validation_status import (
+    CONFIRMED,
+    INSUFFICIENT_EVIDENCE,
+    NOT_CONFIRMED,
+    VALIDATION_STATUS_VALUES,
+)
+
+from youtube_pipeline.external_publication_time import (
+    AFTER_REFERENCE,
+    AT_REFERENCE,
+    BEFORE_REFERENCE,
+    SAME_DAY_TIME_UNKNOWN,
+    parse_external_publication_time,
+    temporal_relation_to_reference,
+)
 from youtube_pipeline.rag_generation_g1 import (
     OPENAI_RESPONSES_URL,
     _approx_tokens,
@@ -36,9 +51,9 @@ from youtube_pipeline.rag_generation_g1 import (
 )
 
 
-RAG_G2_ARTIFACT_VERSION = "rag_generation_g2_v1"
+RAG_G2_ARTIFACT_VERSION = "rag_generation_g2_v2"
 QUERY_PROMPT_VERSION = "rag_news_query_prompt_v0.1"
-VALIDATION_PROMPT_VERSION = "rag_validation_g2_prompt_v0.1"
+VALIDATION_PROMPT_VERSION = "rag_validation_g2_prompt_v0.2"
 
 RAG_VALIDATION_INPUTS_FILE = "rag_validation_inputs.jsonl"
 RAG_CONTEXT_PAYLOADS_FILE = "rag_context_payloads.jsonl"
@@ -51,13 +66,6 @@ RAG_VALIDATION_REPORTS_FILE = "rag_validation_reports.jsonl"
 RAG_GENERATION_MANIFEST_FILE = "rag_generation_manifest.json"
 RAG_RAW_MODEL_RESPONSES_FILE = "rag_raw_model_responses.jsonl"
 
-VALIDATION_STATUS_VALUES = {
-    "confirmed",
-    "partially_confirmed",
-    "not_confirmed",
-    "ambiguous",
-    "insufficient_evidence",
-}
 EVENT_INTERPRETATION_VALUES = {
     "external_event",
     "internal_community_reaction",
@@ -358,6 +366,8 @@ def _create_json_response(
     schema_name: str,
     schema: dict[str, Any],
     timeout: int,
+    reasoning_effort: str | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     temperature_parameter_sent = _should_send_temperature(model)
     payload = {
@@ -383,6 +393,10 @@ def _create_json_response(
     }
     if temperature_parameter_sent:
         payload["temperature"] = temperature
+    if reasoning_effort is not None:
+        payload["reasoning"] = {"effort": reasoning_effort}
+    if max_output_tokens is not None:
+        payload["max_output_tokens"] = max_output_tokens
     response = requests.post(
         OPENAI_RESPONSES_URL,
         headers={
@@ -569,17 +583,16 @@ def _call_serper_news(
 
 
 def _temporal_relation(published_at: Any, trigger_time_utc: str) -> str:
-    if not published_at:
-        return "unknown"
-    published = pd.to_datetime(published_at, utc=True, errors="coerce")
-    if pd.isna(published):
-        return "unknown"
-    trigger = pd.Timestamp(trigger_time_utc)
-    if published < trigger:
-        return "before_trigger"
-    if published == trigger:
-        return "at_trigger"
-    return "after_trigger"
+    relation = temporal_relation_to_reference(
+        parse_external_publication_time(published_at),
+        trigger_time_utc,
+    )
+    return {
+        BEFORE_REFERENCE: "before_trigger",
+        AT_REFERENCE: "at_trigger",
+        AFTER_REFERENCE: "after_trigger",
+        SAME_DAY_TIME_UNKNOWN: "unknown_same_day_date_only",
+    }.get(relation, "unknown")
 
 
 def _normalize_external_evidence(
@@ -599,6 +612,7 @@ def _normalize_external_evidence(
         if not isinstance(result, dict):
             continue
         published_at = result.get("date")
+        publication_time = parse_external_publication_time(published_at)
         records.append(
             {
                 "external_evidence_id": _external_evidence_id(
@@ -612,6 +626,7 @@ def _normalize_external_evidence(
                 "source": result.get("source"),
                 "link": result.get("link"),
                 "published_at": published_at,
+                **publication_time.to_mapping(),
                 "retrieved_at_utc": retrieved_at_utc,
                 "provider": provider,
                 "rank": index,
@@ -696,8 +711,6 @@ def _validation_response_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "validation_id": {"type": "string"},
-            "event_id": {"type": "string"},
             "validation_status": {
                 "type": "string",
                 "enum": sorted(VALIDATION_STATUS_VALUES),
@@ -724,23 +737,9 @@ def _validation_response_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string"},
             },
-            "used_context_comment_ids": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "used_external_evidence_ids": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "post_trigger_context_used": {"type": "boolean"},
             "limitations": {"type": "array", "items": {"type": "string"}},
-            "model_name": {"type": "string"},
-            "prompt_version": {"type": "string"},
-            "validated_at_utc": {"type": "string"},
         },
         "required": [
-            "validation_id",
-            "event_id",
             "validation_status",
             "event_interpretation",
             "confidence_label",
@@ -752,13 +751,7 @@ def _validation_response_schema() -> dict[str, Any]:
             "cited_comment_ids",
             "cited_context_unit_ids",
             "cited_external_evidence_ids",
-            "used_context_comment_ids",
-            "used_external_evidence_ids",
-            "post_trigger_context_used",
             "limitations",
-            "model_name",
-            "prompt_version",
-            "validated_at_utc",
         ],
     }
 
@@ -782,14 +775,16 @@ def _validation_prompt_text(compact_payload: dict[str, Any]) -> tuple[str, str]:
         "- No modifiques la decision original del detector; evalua solo la "
         "validacion posterior.\n"
         "- external_event requiere al menos una cita externa valida.\n"
-        "- confirmed + external_event requiere evidencia externa valida y evidencia "
-        "interna compatible.\n"
-        "- Si no hay evidencia externa suficiente, usa internal_community_reaction, "
-        "ambiguous o insufficient_evidence segun corresponda.\n"
+        "- CONFIRMED requiere evidencia externa valida que corrobore el fenomeno.\n"
+        "- INSUFFICIENT_EVIDENCE significa que la evidencia externa falta, es "
+        "parcial, debil o inconclusa.\n"
+        "- NOT_CONFIRMED requiere evidencia externa suficiente para evaluar que no "
+        "respalda o contradice sustantivamente la hipotesis.\n"
+        "- La evidencia interna por si sola nunca permite CONFIRMED ni NOT_CONFIRMED.\n"
         "- possible_disinformation solo debe usarse si la evidencia disponible "
         "contradice de forma importante afirmaciones presentes en los comentarios "
         "o muestra falta clara de respaldo.\n"
-        "- insufficient_evidence debe usarse cuando no hay evidencia suficiente, no "
+        "- INSUFFICIENT_EVIDENCE debe usarse cuando no hay evidencia suficiente, no "
         "por dudas vagas.\n\n"
         "Devuelve solo JSON valido que cumpla el esquema."
     )
@@ -824,16 +819,12 @@ def _citation_verification(
     cited_comment_ids = set(report.get("cited_comment_ids") or [])
     cited_context_unit_ids = set(report.get("cited_context_unit_ids") or [])
     cited_external_ids = set(report.get("cited_external_evidence_ids") or [])
-    used_comment_ids = set(report.get("used_context_comment_ids") or [])
-    used_external_ids = set(report.get("used_external_evidence_ids") or [])
 
     invalid_comment_ids = sorted(cited_comment_ids.difference(allowed_comment_ids))
     invalid_context_unit_ids = sorted(
         cited_context_unit_ids.difference(allowed_context_unit_ids)
     )
     invalid_external_ids = sorted(cited_external_ids.difference(allowed_external_ids))
-    invalid_used_comment_ids = sorted(used_comment_ids.difference(allowed_comment_ids))
-    invalid_used_external_ids = sorted(used_external_ids.difference(allowed_external_ids))
 
     valid_internal_citation = bool(
         cited_comment_ids.intersection(allowed_comment_ids)
@@ -842,18 +833,14 @@ def _citation_verification(
     valid_external_citation = bool(cited_external_ids.intersection(allowed_external_ids))
     has_valid_citation = valid_internal_citation or valid_external_citation
     status_requires_citation = report.get("validation_status") in {
-        "confirmed",
-        "partially_confirmed",
+        CONFIRMED,
+        NOT_CONFIRMED,
     }
     event_interpretation_requires_external = (
         report.get("event_interpretation") == "external_event"
     )
-    confirmed_external_event = (
-        report.get("validation_status") == "confirmed"
-        and report.get("event_interpretation") == "external_event"
-    )
+    confirmed_external_event = report.get("validation_status") == CONFIRMED
     payload_post_trigger = bool(context_payload.get("post_trigger_context_used"))
-    report_post_trigger = bool(report.get("post_trigger_context_used"))
 
     errors: list[str] = []
     if invalid_comment_ids:
@@ -862,22 +849,24 @@ def _citation_verification(
         errors.append("invalid_cited_context_unit_ids")
     if invalid_external_ids:
         errors.append("invalid_cited_external_evidence_ids")
-    if invalid_used_comment_ids:
-        errors.append("invalid_used_context_comment_ids")
-    if invalid_used_external_ids:
-        errors.append("invalid_used_external_evidence_ids")
-    if status_requires_citation and not has_valid_citation:
-        errors.append("status_requires_at_least_one_valid_citation")
+    if status_requires_citation and not valid_external_citation:
+        errors.append("decisive_g2_status_requires_valid_external_citation")
     if event_interpretation_requires_external and not valid_external_citation:
         errors.append("external_event_requires_valid_external_citation")
-    if confirmed_external_event and not valid_internal_citation:
-        errors.append("confirmed_external_event_requires_internal_citation")
     if confirmed_external_event and not valid_external_citation:
         errors.append("confirmed_external_event_requires_external_citation")
-    if payload_post_trigger != report_post_trigger:
-        errors.append("post_trigger_context_used_mismatch")
     if not allowed_external_ids and report.get("event_interpretation") == "external_event":
         errors.append("external_event_without_external_evidence")
+    if not allowed_external_ids and report.get("validation_status") != INSUFFICIENT_EVIDENCE:
+        errors.append("no_external_evidence_requires_insufficient_evidence")
+    if report.get("validation_status") == CONFIRMED and report.get(
+        "external_evidence_assessment"
+    ) != "supports":
+        errors.append("confirmed_requires_supporting_external_assessment")
+    if report.get("validation_status") == NOT_CONFIRMED and report.get(
+        "external_evidence_assessment"
+    ) != "contradicts":
+        errors.append("not_confirmed_requires_contradicting_external_assessment")
 
     return {
         "valid": not errors,
@@ -885,18 +874,21 @@ def _citation_verification(
         "invalid_cited_comment_ids": invalid_comment_ids,
         "invalid_cited_context_unit_ids": invalid_context_unit_ids,
         "invalid_cited_external_evidence_ids": invalid_external_ids,
-        "invalid_used_context_comment_ids": invalid_used_comment_ids,
-        "invalid_used_external_evidence_ids": invalid_used_external_ids,
+        "invalid_used_context_comment_ids": [],
+        "invalid_used_external_evidence_ids": [],
         "status_requires_citation": status_requires_citation,
         "has_valid_citation": has_valid_citation,
         "valid_internal_citation": valid_internal_citation,
         "valid_external_citation": valid_external_citation,
         "event_interpretation_requires_external": event_interpretation_requires_external,
         "payload_post_trigger_context_used": payload_post_trigger,
-        "report_post_trigger_context_used": report_post_trigger,
+        "report_post_trigger_context_used": payload_post_trigger,
         "allowed_comment_count": len(allowed_comment_ids),
         "allowed_context_unit_count": len(allowed_context_unit_ids),
         "allowed_external_evidence_count": len(allowed_external_ids),
+        "allowed_comment_ids": sorted(allowed_comment_ids),
+        "allowed_external_evidence_ids": sorted(allowed_external_ids),
+        "post_trigger_context_used": payload_post_trigger,
     }
 
 
@@ -919,6 +911,15 @@ def _finalize_report(
     report["model_name"] = model
     report["prompt_version"] = VALIDATION_PROMPT_VERSION
     report["validated_at_utc"] = validated_at_utc
+    report["used_context_comment_ids"] = citation_verification.get(
+        "allowed_comment_ids", []
+    )
+    report["used_external_evidence_ids"] = citation_verification.get(
+        "allowed_external_evidence_ids", []
+    )
+    report["post_trigger_context_used"] = citation_verification.get(
+        "post_trigger_context_used", False
+    )
     report["citation_verification"] = citation_verification
     report["attempt_count"] = attempt_count
     report["raw_response_id"] = raw_response_id
@@ -945,7 +946,7 @@ def _error_report(
     return {
         "validation_id": validation_id,
         "event_id": event_id,
-        "validation_status": "insufficient_evidence",
+        "validation_status": INSUFFICIENT_EVIDENCE,
         "event_interpretation": "unclear",
         "confidence_label": "low",
         "claim_summary": "No se obtuvo una validacion G-2 estructurada valida.",

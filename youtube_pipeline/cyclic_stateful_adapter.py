@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from dataclasses import dataclass
@@ -82,7 +81,7 @@ def _metadata_by_comment(input_inventory: pd.DataFrame) -> dict[str, dict[str, A
 
 @dataclass
 class CyclicStatefulAdapterConfig:
-    simulation_dir: str | Path = "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
+    simulation_dir: str | Path
     run_monitoring: bool = False
     run_detection: bool = False
     run_rag: bool = False
@@ -113,20 +112,6 @@ class CyclicStatefulAdapterConfig:
                 "C-3 prepares stateful inputs only. These flags must remain false: "
                 + ", ".join(enabled)
             )
-
-
-def load_cyclic_stateful_adapter_config(
-    config_file: str | Path | None,
-    *,
-    overrides: dict[str, Any] | None = None,
-) -> CyclicStatefulAdapterConfig:
-    payload: dict[str, Any] = {}
-    if config_file:
-        payload = _read_json(Path(config_file))
-    config_payload = payload.get("cyclic_stateful_adapter", payload)
-    if overrides:
-        config_payload = {**config_payload, **overrides}
-    return CyclicStatefulAdapterConfig.from_mapping(config_payload)
 
 
 def _validate_input_artifacts(
@@ -231,6 +216,7 @@ def _exited_rows(
                 "cycle_index": int(cycle["cycle_index"]),
                 "comment_id": comment_id,
                 "video_id": meta.get("video_id"),
+                "author_id": meta.get("author_id"),
                 "event_time_utc": meta.get("event_time_utc"),
                 "first_seen_cycle_id": meta.get("first_seen_cycle_id"),
                 "analysis_window_start_utc": cycle["analysis_window_start_utc"],
@@ -264,6 +250,7 @@ def _active_rows(
                 "cycle_index": int(row.get("cycle_index")),
                 "comment_id": comment_id,
                 "video_id": row.get("video_id"),
+                "author_id": row.get("author_id"),
                 "event_time_utc": row.get("event_time_utc"),
                 "first_seen_cycle_id": row.get("first_seen_cycle_id"),
                 "analysis_window_start_utc": row.get("analysis_window_start_utc"),
@@ -296,6 +283,7 @@ def _new_outside_window_rows(
                 "cycle_index": int(cycle["cycle_index"]),
                 "comment_id": str(row.get("comment_id")),
                 "video_id": row.get("video_id"),
+                "author_id": row.get("author_id"),
                 "event_time_utc": row.get("event_time_utc"),
                 "first_seen_cycle_id": row.get("first_seen_cycle_id"),
                 "analysis_window_start_utc": cycle["analysis_window_start_utc"],
@@ -687,53 +675,7 @@ def run_cyclic_stateful_adapter(config: CyclicStatefulAdapterConfig) -> dict[str
     }
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Prepare C-3 stateful cyclic ingestion inputs for future monitoring and "
-            "detection. This does not run monitoring, detection, RAG, LLMs, Serper, "
-            "embeddings, or vectorstores."
-        )
-    )
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument(
-        "--simulation-dir",
-        default=None,
-        help="Directory containing C-0/C-2 cyclic ingestion artifacts.",
-    )
-    parser.add_argument("--run-monitoring", action="store_true")
-    parser.add_argument("--run-detection", action="store_true")
-    parser.add_argument("--run-rag", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "simulation_dir": args.simulation_dir,
-            "run_monitoring": args.run_monitoring,
-            "run_detection": args.run_detection,
-            "run_rag": args.run_rag,
-        }.items()
-        if value is not None
-    }
-    try:
-        config = load_cyclic_stateful_adapter_config(args.config_file, overrides=overrides)
-        summary = run_cyclic_stateful_adapter(config)
-    except ValueError as exc:
-        parser.error(str(exc))
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "CyclicStatefulAdapterConfig",
-    "load_cyclic_stateful_adapter_config",
     "run_cyclic_stateful_adapter",
 ]
-
-
-if __name__ == "__main__":
-    main()

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from dataclasses import dataclass
@@ -11,8 +10,6 @@ import pandas as pd
 
 
 SIGNALS_DRY_RUN_MODE = "signals_dry_run"
-DEFAULT_SIMULATION_DIR = "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
-DEFAULT_CANONICAL_DATASET_PATH = "data/gold/clean_comments.parquet"
 DEFAULT_XIAO_SIGNAL_NAME = "active_window_comment_count"
 INTERVAL_POLICY = "semi_open_daily_bounds_start_inclusive_end_exclusive"
 
@@ -113,9 +110,9 @@ def _signal_date(cycle: dict[str, Any]) -> str:
 
 @dataclass
 class CyclicDailySignalConfig:
-    simulation_dir: str | Path = DEFAULT_SIMULATION_DIR
+    simulation_dir: str | Path
+    canonical_dataset_path: str | Path
     mode: str = SIGNALS_DRY_RUN_MODE
-    canonical_dataset_path: str | Path = DEFAULT_CANONICAL_DATASET_PATH
     output_dir: str | Path | None = None
     xiao_signal_name: str = DEFAULT_XIAO_SIGNAL_NAME
     max_cycles: int | None = None
@@ -164,20 +161,6 @@ class CyclicDailySignalConfig:
                 "C-5 signals_dry_run only builds daily signals. These flags must remain false: "
                 + ", ".join(enabled)
             )
-
-
-def load_cyclic_daily_signal_config(
-    config_file: str | Path | None,
-    *,
-    overrides: dict[str, Any] | None = None,
-) -> CyclicDailySignalConfig:
-    payload: dict[str, Any] = {}
-    if config_file:
-        payload = _read_json(Path(config_file))
-    config_payload = payload.get("cyclic_daily_signals", payload)
-    if overrides:
-        config_payload = {**config_payload, **overrides}
-    return CyclicDailySignalConfig.from_mapping(config_payload)
 
 
 def _load_and_validate_gold(config: CyclicDailySignalConfig) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -738,67 +721,7 @@ def run_cyclic_daily_signals(config: CyclicDailySignalConfig) -> dict[str, Any]:
     }
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Build C-5 daily aggregated signal series for future stateful XIAO execution. "
-            "This mode does not execute XIAO, detection, RAG, LLMs, Serper, embeddings, "
-            "or vectorstores."
-        )
-    )
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument("--simulation-dir", default=None)
-    parser.add_argument("--mode", default=None)
-    parser.add_argument("--canonical-dataset-path", default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--xiao-signal-name", default=None)
-    parser.add_argument("--max-cycles", type=int, default=None)
-    parser.add_argument("--run-xiao", action="store_true")
-    parser.add_argument("--run-detection", action="store_true")
-    parser.add_argument("--run-rag", action="store_true")
-    parser.add_argument("--run-llm", action="store_true")
-    parser.add_argument("--run-serper", action="store_true")
-    parser.add_argument("--use-embeddings", action="store_true")
-    parser.add_argument("--use-vectorstore", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "simulation_dir": args.simulation_dir,
-            "mode": args.mode,
-            "canonical_dataset_path": args.canonical_dataset_path,
-            "output_dir": args.output_dir,
-            "xiao_signal_name": args.xiao_signal_name,
-            "max_cycles": args.max_cycles,
-            "run_xiao": args.run_xiao,
-            "run_detection": args.run_detection,
-            "run_rag": args.run_rag,
-            "run_llm": args.run_llm,
-            "run_serper": args.run_serper,
-            "use_embeddings": args.use_embeddings,
-            "use_vectorstore": args.use_vectorstore,
-        }.items()
-        if value is not None
-    }
-    try:
-        config = load_cyclic_daily_signal_config(args.config_file, overrides=overrides)
-        summary = run_cyclic_daily_signals(config)
-    except ValueError as exc:
-        parser.error(str(exc))
-    print(json.dumps(_json_ready(summary), indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "CyclicDailySignalConfig",
-    "load_cyclic_daily_signal_config",
     "run_cyclic_daily_signals",
 ]
-
-
-if __name__ == "__main__":
-    main()

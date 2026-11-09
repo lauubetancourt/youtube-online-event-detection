@@ -1,0 +1,109 @@
+{
+  "identity": {
+    "run_id": "compatibility_cyclic_current"
+  },
+  "artifacts": {
+    "run_mode": "development",
+    "trace_level": "minimal"
+  },
+  "simulation": {
+    "ingestion": {
+      "input_path": "data/gold/clean_comments.parquet",
+      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "simulation_mode": "cyclic_ingestion_simulation",
+      "timezone": "America/Bogota",
+      "canonical_timezone": "UTC",
+      "analysis_window_size_days": 3,
+      "cycle_frequency": "daily",
+      "rag_mode": "sidecars_only",
+      "ts_col": "event_time_utc",
+      "comment_id_col": "comment_id",
+      "video_id_col": "video_id",
+      "collection_start_date_local": null,
+      "collection_end_date_local": null,
+      "simulation_run_id": "sim_42fc5b0f114b",
+      "dry_run": true,
+      "notes": null,
+      "params": {}
+    },
+    "orchestration": {
+      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "run_monitoring": false,
+      "run_detection": false,
+      "run_rag": false,
+      "update_cycle_state": true
+    },
+    "stateful_adapter": {
+      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "run_monitoring": false,
+      "run_detection": false,
+      "run_rag": false
+    }
+  },
+  "signals": {
+    "daily": {
+      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "mode": "signals_dry_run",
+      "canonical_dataset_path": "data/gold/clean_comments.parquet",
+      "output_dir": null,
+      "xiao_signal_name": "active_window_comment_count",
+      "max_cycles": null,
+      "run_xiao": false,
+      "run_detection": false,
+      "run_rag": false,
+      "run_llm": false,
+      "run_serper": false,
+      "use_embeddings": false,
+      "use_vectorstore": false
+    }
+  },
+  "detection": {
+    "connector": {
+      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "mode": "detection_dry_run",
+      "max_cycles": 5,
+      "canonical_dataset_path": "data/gold/clean_comments.parquet",
+      "output_dir": null,
+      "debug_full_rows": false,
+      "run_monitoring": false,
+      "run_detection": false,
+      "run_rag": false
+    },
+    "xiao_ema": {
+      "ts_col": "event_time_utc",
+      "text_col": "text",
+      "window_size": "120s",
+      "slide_interval": "30s",
+      "slow_window": "10min",
+      "sensitivity_threshold": 1.5,
+      "v_min": 46,
+      "cooldown": "3min",
+      "warmup_windows": 10,
+      "extreme_volume_multiplier": 2.0
+    },
+    "daily_frequency": {
+      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_frequency_baseline_cooldown_0",
+      "signal_name": "new_comment_count",
+      "baseline_window_size_cycles": 3,
+      "k_multiplier": 2.0,
+      "min_count": 500,
+      "min_delta": 250.0,
+      "min_pct_change": 0.5,
+      "warmup_cycles": 3,
+      "cooldown_cycles": 0,
+      "cooldown_policy": "disabled_for_daily_detection",
+      "use_pct_change": true,
+      "use_delta": true,
+      "trigger_on_increase_only": true,
+      "timezone": "America/Bogota",
+      "canonical_timezone": "UTC",
+      "parameter_status": "exploratory_defaults",
+      "run_rag": false,
+      "run_llm": false,
+      "run_serper": false,
+      "use_embeddings": false,
+      "use_vectorstore": false
+    }
+  }
+}

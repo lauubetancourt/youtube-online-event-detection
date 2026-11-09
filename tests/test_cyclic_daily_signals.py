@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import tempfile
 import unittest
@@ -7,9 +8,19 @@ from pathlib import Path
 
 import pandas as pd
 
+import youtube_pipeline.cyclic_daily_signals as daily_signals_module
+from youtube_pipeline.configuration import resolve_run_config, run_config_from_mapping
 from youtube_pipeline.cyclic_daily_signals import (
     CyclicDailySignalConfig,
     run_cyclic_daily_signals,
+)
+from youtube_pipeline.entrypoints.cyclic_daily_signals import (
+    load_legacy_daily_signal_config,
+    resolve_cyclic_daily_signal_config,
+)
+from youtube_pipeline.entrypoints.cyclic_ingestion import (
+    LEGACY_INPUT_PATH,
+    LEGACY_OUTPUT_DIR,
 )
 
 
@@ -289,7 +300,95 @@ class CyclicDailySignalsTests(unittest.TestCase):
             "use_vectorstore",
         ]:
             with self.assertRaises(ValueError):
-                CyclicDailySignalConfig(**{flag: True}).validate_c5_scope()
+                CyclicDailySignalConfig(
+                    simulation_dir="outputs/cyclic",
+                    canonical_dataset_path="prepared/comments.parquet",
+                    **{flag: True},
+                ).validate_c5_scope()
+
+    def test_common_resolver_matches_legacy_signal_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            common_dir = self._write_artifacts(base / "common")
+            legacy_dir = self._write_artifacts(base / "legacy")
+            gold_path = base / "gold.csv"
+            self._write_gold(gold_path)
+            run = run_config_from_mapping(
+                {
+                    "identity": {"run_id": "run_daily_signals"},
+                    "signals": {
+                        "daily": {
+                            "simulation_dir": "common",
+                            "canonical_dataset_path": "gold.csv",
+                        }
+                    },
+                }
+            )
+            common_config = resolve_run_config(run, base_dir=base).config.signals.daily
+            legacy_config = load_legacy_daily_signal_config(
+                None,
+                overrides={
+                    "simulation_dir": legacy_dir,
+                    "canonical_dataset_path": gold_path,
+                },
+            )
+
+            common_summary = run_cyclic_daily_signals(common_config)
+            legacy_summary = run_cyclic_daily_signals(legacy_config)
+
+            comparable_keys = {
+                "simulation_run_id",
+                "mode",
+                "processed_cycle_count",
+                "failed_quality_count",
+                "xiao_execution_status",
+                "rag_execution_status",
+                "xiao_signal_name",
+                "unavailable_signal_names",
+            }
+            self.assertEqual(
+                {key: common_summary[key] for key in comparable_keys},
+                {key: legacy_summary[key] for key in comparable_keys},
+            )
+            for artifact in (
+                "cycle_signal_series.jsonl",
+                "cycle_signal_quality_report.jsonl",
+                "cycle_xiao_inputs.jsonl",
+            ):
+                with self.subTest(artifact=artifact):
+                    self.assertEqual(
+                        (common_dir / artifact).read_text(encoding="utf-8"),
+                        (legacy_dir / artifact).read_text(encoding="utf-8"),
+                    )
+
+    def test_paths_and_argparse_are_outside_signal_domain(self) -> None:
+        with self.assertRaises(TypeError):
+            CyclicDailySignalConfig()
+        source = inspect.getsource(daily_signals_module)
+        self.assertNotIn(LEGACY_INPUT_PATH, source)
+        self.assertNotIn(LEGACY_OUTPUT_DIR, source)
+        self.assertNotIn("import argparse", source)
+
+        legacy = load_legacy_daily_signal_config(None)
+        self.assertEqual(legacy.simulation_dir, LEGACY_OUTPUT_DIR)
+        self.assertEqual(legacy.canonical_dataset_path, LEGACY_INPUT_PATH)
+
+    def test_current_profile_resolves_daily_signal_component(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        config = resolve_cyclic_daily_signal_config(
+            config_file=repository_root / "configs/compatibility/cyclic_current.json",
+            base_dir=repository_root,
+        )
+
+        self.assertEqual(
+            config.simulation_dir,
+            (repository_root / LEGACY_OUTPUT_DIR).resolve(strict=False),
+        )
+        self.assertEqual(
+            config.canonical_dataset_path,
+            (repository_root / LEGACY_INPUT_PATH).resolve(strict=False),
+        )
+        self.assertEqual(config.xiao_signal_name, "active_window_comment_count")
 
 
 if __name__ == "__main__":

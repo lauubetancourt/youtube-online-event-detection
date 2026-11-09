@@ -269,6 +269,17 @@ def _make_run_id(
     return f"run_{digest}"
 
 
+def derive_rag_sidecar_run_id(config: RagSidecarBuildConfig) -> str:
+    """Return the existing path-derived stage identity for a sidecar run."""
+
+    return _make_run_id(
+        detector_name=config.detector_name,
+        trigger_comment_map_path=config.trigger_comment_map_path,
+        comments_path=config.comments_path,
+        snapshots_path=config.snapshots_path,
+    )
+
+
 def _make_event_id(
     *,
     run_id: str,
@@ -1209,6 +1220,7 @@ __all__ = [
     "build_event_evidence_packages",
     "build_event_thread_map",
     "build_event_video_map",
+    "derive_rag_sidecar_run_id",
     "load_rag_sidecar_config",
     "read_table",
     "write_rag_sidecar_artifacts",

@@ -7,15 +7,20 @@ from pathlib import Path
 
 from youtube_pipeline.rag_generation_g2 import _schema_errors
 from youtube_pipeline.rag_generation_g2_hierarchical import (
+    DETERMINISTIC_METADATA,
+    LLM_FALLBACK,
     QUERY_PROMPT_VERSION,
     RagG2HierarchicalConfig,
+    _build_video_query_payload,
     _build_video_bundles,
     _classify_video_query,
+    _deterministic_metadata_query,
     _query_candidate_id,
     _query_record_from_model,
     _query_response_schema,
     _select_video_batch,
     _verify_video_report,
+    has_sufficient_search_metadata,
     plan_rag_g2_hierarchical_dry_run,
 )
 
@@ -213,16 +218,8 @@ class RagG2HierarchicalTests(unittest.TestCase):
         ][0]
         self.assertEqual(pending_record["video_batch_status"], "pending_batch")
 
-    def test_claim_query_can_be_null_without_extra_execution(self) -> None:
-        payload = {
-            "primary_event_query": "Beta noticias Canal B",
-            "claim_verification_query": None,
-            "claim_query_status": "no_clear_factual_claim",
-            "input_context_summary": "Resumen",
-            "primary_query_rationale": "Usa titulo",
-            "claim_query_rationale": "No hay claim factual claro",
-            "limitations": [],
-        }
+    def test_query_schema_and_record_have_no_unused_claim_output(self) -> None:
+        payload = {"query": "Beta noticias Canal B"}
         self.assertEqual(_schema_errors(payload, _query_response_schema()), [])
 
         validation_input = _validation_input()
@@ -230,25 +227,23 @@ class RagG2HierarchicalTests(unittest.TestCase):
             validation_input=validation_input,
             context_payload=_context_payload(),
         )[1]
-        claim_status, claim_limitations, _ = _classify_video_query(
-            payload["claim_verification_query"],
-            _query_response_schema(),
-            query_kind="claim_verification_query",
+        query_payload = _build_video_query_payload(
+            validation_input=validation_input,
+            bundle=bundle,
         )
-        self.assertEqual(claim_status, "not_applicable")
-        self.assertEqual(claim_limitations, [])
+        query_status, query_limitations, verification = _classify_video_query(
+            payload["query"], query_payload
+        )
+        self.assertIn(query_status, {"valid", "broad_but_valid"})
 
         record = _query_record_from_model(
             query_candidate_id=_query_candidate_id(
                 "evt_test", "video_b", QUERY_PROMPT_VERSION, "gpt-5-mini"
             ),
             query_result=payload,
-            primary_query_status="valid",
-            primary_query_limitations=[],
-            primary_query_scope_verification={},
-            claim_query_status=claim_status,
-            claim_query_limitations=claim_limitations,
-            claim_query_scope_verification={},
+            query_status=query_status,
+            query_limitations=query_limitations,
+            query_scope_verification=verification,
             validation_input=validation_input,
             bundle=bundle,
             search_start="2026-02-19",
@@ -260,9 +255,51 @@ class RagG2HierarchicalTests(unittest.TestCase):
             ),
             generated_at_utc="2026-02-20T12:00:00+00:00",
         )
-        self.assertIsNone(record["claim_verification_query"])
-        self.assertEqual(record["claim_query_status"], "no_clear_factual_claim")
-        self.assertFalse(record["claim_query_executed"])
+        self.assertEqual(record["query_generation_mode"], LLM_FALLBACK)
+        self.assertEqual(record["query_text"], payload["query"])
+        self.assertNotIn("claim_verification_query", record)
+
+    def test_metadata_first_query_uses_title_with_or_without_channel(self) -> None:
+        with_channel = {
+            "title": "Entrevista a Iván Cepeda en Noticias Caracol",
+            "channel_title": "Noticias Caracol",
+            "published_at": "2026-04-20T10:00:00Z",
+        }
+        self.assertTrue(has_sufficient_search_metadata(with_channel))
+        query, fields = _deterministic_metadata_query(with_channel)
+        self.assertEqual(
+            query,
+            "Entrevista a Iván Cepeda en Noticias Caracol 2026-04-20",
+        )
+        self.assertEqual(fields, ["video_title", "video_date"])
+
+        title_only = {"title": "Iván Cepeda debate presidencial"}
+        self.assertTrue(has_sufficient_search_metadata(title_only))
+        self.assertEqual(
+            _deterministic_metadata_query(title_only),
+            ("Iván Cepeda debate presidencial", ["video_title"]),
+        )
+
+    def test_generic_or_missing_title_requires_llm_fallback(self) -> None:
+        for video in ({}, {"title": "Video"}, {"title": "En vivo"}):
+            self.assertFalse(has_sufficient_search_metadata(video))
+
+    def test_fallback_rejects_unsupported_event_inference(self) -> None:
+        validation_input = _validation_input()
+        bundle = _build_video_bundles(
+            validation_input=validation_input,
+            context_payload=_context_payload(),
+        )[0]
+        payload = _build_video_query_payload(
+            validation_input=validation_input,
+            bundle=bundle,
+        )
+        status, limitations, verification = _classify_video_query(
+            "Alpha acto de campaña presidencial", payload
+        )
+        self.assertEqual(status, "invalid_invented_content")
+        self.assertIn("query_contains_unsupported_event_inference", limitations)
+        self.assertIn("acto de campaña", verification["unsupported_phrases"])
 
     def test_video_report_rejects_cross_video_citations(self) -> None:
         validation_input = _validation_input()
@@ -273,7 +310,7 @@ class RagG2HierarchicalTests(unittest.TestCase):
         video_a_bundle = [bundle for bundle in bundles if bundle["video_id"] == "video_a"][0]
         report = {
             "video_id": "video_a",
-            "validation_status": "confirmed",
+            "validation_status": "CONFIRMED",
             "event_interpretation": "internal_community_reaction",
             "cited_comment_ids": ["b1"],
             "cited_context_unit_ids": ["unit_b1"],
@@ -292,7 +329,10 @@ class RagG2HierarchicalTests(unittest.TestCase):
         self.assertFalse(verification["valid"])
         self.assertIn("invalid_cited_comment_ids_for_video", verification["errors"])
         self.assertIn("invalid_cited_context_unit_ids_for_video", verification["errors"])
-        self.assertIn("invalid_used_context_comment_ids_for_video", verification["errors"])
+        self.assertIn(
+            "no_external_evidence_requires_insufficient_evidence",
+            verification["errors"],
+        )
 
     def test_dry_run_reads_fixtures_without_network_or_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -325,10 +365,19 @@ class RagG2HierarchicalTests(unittest.TestCase):
             self.assertFalse(plan["network_calls_made"])
             self.assertFalse(plan["openai_calls_made"])
             self.assertFalse(plan["serper_calls_made"])
-            self.assertFalse(plan["claim_verification_query_executed"])
+            self.assertFalse(plan["claim_verification_query_generated"])
             self.assertEqual(plan["summary"]["videos_total"], 3)
             self.assertEqual(plan["summary"]["videos_processable_in_current_batch"], 2)
             self.assertEqual(plan["summary"]["videos_pending"], 1)
+            self.assertEqual(plan["summary"]["estimated_llm_calls"], 2)
+            self.assertTrue(
+                all(
+                    row["query_generation"]["query_generation_mode"]
+                    == DETERMINISTIC_METADATA
+                    for row in plan["events"][0]["video_batch_plan"]
+                    if row["video_batch_status"] == "processed"
+                )
+            )
             self.assertFalse(output_dir.exists())
 
 

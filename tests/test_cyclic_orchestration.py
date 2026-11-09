@@ -171,7 +171,7 @@ class CyclicOrchestrationTests(unittest.TestCase):
 
     def test_c2_rejects_execution_flags(self) -> None:
         for flag in ["run_monitoring", "run_detection", "run_rag"]:
-            kwargs = {flag: True}
+            kwargs = {"simulation_dir": "outputs/cyclic", flag: True}
             with self.assertRaises(ValueError):
                 CyclicOrchestratorConfig(**kwargs).validate_c2_scope()
 

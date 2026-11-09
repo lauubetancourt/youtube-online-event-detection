@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -10,6 +9,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+from youtube_pipeline.experimental_input import (
+    ExperimentalInputPolicyConfig,
+    adapt_activity_records,
+    prepare_causal_minimal_batch,
+)
+from youtube_pipeline.storage import canonicalize_comment_event_time
 
 
 LOCAL_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -76,8 +82,8 @@ def _json_default(value: Any) -> Any:
 
 @dataclass
 class CyclicIngestionConfig:
-    input_path: str | Path = "data/gold/clean_comments.parquet"
-    output_dir: str | Path = "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
+    input_path: str | Path
+    output_dir: str | Path
     simulation_mode: str = DEFAULT_SIMULATION_MODE
     timezone: str = DEFAULT_TIMEZONE
     canonical_timezone: str = DEFAULT_CANONICAL_TIMEZONE
@@ -129,23 +135,6 @@ class CyclicIngestionConfig:
 
     def output_path(self) -> Path:
         return Path(self.output_dir)
-
-
-def load_cyclic_ingestion_config(
-    config_file: str | Path | None,
-    *,
-    overrides: dict[str, Any] | None = None,
-) -> CyclicIngestionConfig:
-    payload: dict[str, Any] = {}
-    if config_file:
-        path = Path(config_file)
-        if not path.exists():
-            raise FileNotFoundError(f"Config file not found: {path}")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    config_payload = payload.get("cyclic_ingestion_simulation", payload)
-    if overrides:
-        config_payload = {**config_payload, **overrides}
-    return CyclicIngestionConfig.from_mapping(config_payload)
 
 
 def _prepare_comments(
@@ -406,12 +395,15 @@ def _build_cycle_manifests_and_processed_inventory(
     return pd.DataFrame(manifest_rows), processed_inventory
 
 
-def _input_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
-    return [
+def _input_inventory_columns(
+    config: CyclicIngestionConfig, *, include_policy_lineage: bool = False
+) -> list[str]:
+    columns = [
         "simulation_run_id",
         "source_row_id",
         config.comment_id_col,
         config.video_id_col,
+        "author_id",
         config.ts_col,
         "event_time_local",
         "event_date_local",
@@ -425,15 +417,30 @@ def _input_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
         "is_late_arrival",
         "late_arrival_status",
     ]
+    if include_policy_lineage:
+        columns.extend(
+            [
+                "input_policy_id",
+                "input_source_layer",
+                "input_source_path",
+                "input_source_sha256",
+                "input_source_row_index",
+                "input_quality_flags",
+            ]
+        )
+    return columns
 
 
-def _processed_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
-    return [
+def _processed_inventory_columns(
+    config: CyclicIngestionConfig, *, include_policy_lineage: bool = False
+) -> list[str]:
+    columns = [
         "simulation_run_id",
         "cycle_id",
         "cycle_index",
         config.comment_id_col,
         config.video_id_col,
+        "author_id",
         config.ts_col,
         "event_time_local",
         "first_seen_cycle_id",
@@ -444,6 +451,18 @@ def _processed_inventory_columns(config: CyclicIngestionConfig) -> list[str]:
         "is_duplicate",
         "is_late_arrival",
     ]
+    if include_policy_lineage:
+        columns.extend(
+            [
+                "input_policy_id",
+                "input_source_layer",
+                "input_source_path",
+                "input_source_sha256",
+                "input_source_row_index",
+                "input_quality_flags",
+            ]
+        )
+    return columns
 
 
 def _normalize_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -547,8 +566,9 @@ def _build_manifest(
     unique_comment_count: int,
     duplicate_row_count: int,
     invalid_timestamp_count: int,
+    input_policy_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    manifest = {
         "simulation_run_id": simulation_run_id,
         "simulation_mode": config.simulation_mode,
         "execution_mode": "dry_run" if config.dry_run else "materialized_partition",
@@ -612,6 +632,9 @@ def _build_manifest(
         "notes": config.notes,
         "params": config.params,
     }
+    if input_policy_manifest is not None:
+        manifest["experimental_input_policy"] = input_policy_manifest
+    return manifest
 
 
 def _build_state(
@@ -640,9 +663,29 @@ def _build_state(
     }
 
 
-def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, Any]:
+def build_cyclic_ingestion_dry_run(
+    config: CyclicIngestionConfig,
+    *,
+    input_policy: ExperimentalInputPolicyConfig | None = None,
+) -> dict[str, Any]:
     config.validate()
     raw_df = _read_table(config.input_path)
+    source_input_rows = len(raw_df)
+    input_policy_manifest = None
+    if input_policy is not None:
+        raw_df = canonicalize_comment_event_time(raw_df)
+        prepared_batch = prepare_causal_minimal_batch(
+            raw_df,
+            input_policy,
+            source_path=config.input_path,
+        )
+        activity_records = adapt_activity_records(prepared_batch.records)
+        raw_df = (
+            pd.DataFrame([record.to_mapping() for record in activity_records])
+            if activity_records
+            else prepared_batch.dataframe
+        )
+        input_policy_manifest = prepared_batch.manifest
     prepared_df, invalid_timestamp_count = _prepare_comments(raw_df, config)
     simulation_run_id = _deterministic_simulation_run_id(prepared_df, config)
     cycles = _build_cycle_records(prepared_df, config, simulation_run_id)
@@ -652,6 +695,10 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
         assigned_df, cycles, config
     )
     duplicate_row_count = int(assigned_df["is_duplicate"].sum()) if not assigned_df.empty else 0
+    if input_policy_manifest is not None:
+        duplicate_row_count += int(
+            input_policy_manifest["exact_duplicates_suppressed"]
+        )
     future_leak_count = (
         int(cycles_df["future_leak_count"].sum())
         if "future_leak_count" in cycles_df and not cycles_df.empty
@@ -670,11 +717,12 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
         config=config,
         simulation_run_id=simulation_run_id,
         cycles_df=cycles_df,
-        input_rows=len(raw_df),
+        input_rows=source_input_rows,
         valid_rows=len(prepared_df),
         unique_comment_count=len(unique_comment_ids),
         duplicate_row_count=duplicate_row_count,
         invalid_timestamp_count=invalid_timestamp_count,
+        input_policy_manifest=input_policy_manifest,
     )
     state = _build_state(
         config=config,
@@ -689,7 +737,7 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
         invalid_timestamp_count=invalid_timestamp_count,
         duplicate_row_count=duplicate_row_count,
         future_leak_count=future_leak_count,
-        total_rows=len(raw_df),
+        total_rows=source_input_rows,
         valid_rows=len(prepared_df),
     )
 
@@ -703,24 +751,29 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
     _write_csv(
         output_dir / "cycle_input_inventory.csv",
         assigned_df,
-        columns=_input_inventory_columns(config),
+        columns=_input_inventory_columns(
+            config, include_policy_lineage=input_policy_manifest is not None
+        ),
     )
     _write_csv(
         output_dir / "cycle_processed_inventory.csv",
         processed_df,
-        columns=_processed_inventory_columns(config),
+        columns=_processed_inventory_columns(
+            config, include_policy_lineage=input_policy_manifest is not None
+        ),
     )
 
     return {
         "simulation_run_id": simulation_run_id,
         "output_dir": str(output_dir),
         "cycles_total": int(len(cycles_df)),
-        "input_rows": int(len(raw_df)),
+        "input_rows": int(source_input_rows),
         "valid_timestamp_rows": int(len(prepared_df)),
         "unique_comment_count": int(len(unique_comment_ids)),
         "duplicate_row_count": duplicate_row_count,
         "invalid_timestamp_count": invalid_timestamp_count,
         "future_leak_count": future_leak_count,
+        "experimental_input_policy": input_policy_manifest,
         "total_new_comments": int(cycles_df["new_comment_count"].sum())
         if "new_comment_count" in cycles_df
         else 0,
@@ -738,58 +791,7 @@ def build_cyclic_ingestion_dry_run(config: CyclicIngestionConfig) -> dict[str, A
     }
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Build C-0/C-1 dry-run contracts and temporal partitions for "
-            "cyclic_ingestion_simulation. This does not run monitoring, detection, "
-            "RAG, LLMs, Serper, embeddings, or vectorstores."
-        )
-    )
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument("--input-path", default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--timezone", default=None)
-    parser.add_argument("--canonical-timezone", default=None)
-    parser.add_argument("--analysis-window-size-days", type=int, default=None)
-    parser.add_argument("--collection-start-date-local", default=None)
-    parser.add_argument("--collection-end-date-local", default=None)
-    parser.add_argument("--simulation-run-id", default=None)
-    parser.add_argument("--rag-mode", default=None)
-    parser.add_argument("--notes", default=None)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "input_path": args.input_path,
-            "output_dir": args.output_dir,
-            "timezone": args.timezone,
-            "canonical_timezone": args.canonical_timezone,
-            "analysis_window_size_days": args.analysis_window_size_days,
-            "collection_start_date_local": args.collection_start_date_local,
-            "collection_end_date_local": args.collection_end_date_local,
-            "simulation_run_id": args.simulation_run_id,
-            "rag_mode": args.rag_mode,
-            "notes": args.notes,
-        }.items()
-        if value is not None
-    }
-    config = load_cyclic_ingestion_config(args.config_file, overrides=overrides)
-    summary = build_cyclic_ingestion_dry_run(config)
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "CyclicIngestionConfig",
     "build_cyclic_ingestion_dry_run",
-    "load_cyclic_ingestion_config",
 ]
-
-
-if __name__ == "__main__":
-    main()

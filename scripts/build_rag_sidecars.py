@@ -11,11 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from youtube_pipeline.rag_sidecars import (
-    RagSidecarBuildConfig,
-    load_rag_sidecar_config,
-    write_rag_sidecar_artifacts_from_config,
-)
+from youtube_pipeline.entrypoints.non_daily_rag import resolve_rag_sidecar_config
+from youtube_pipeline.rag_sidecars import write_rag_sidecar_artifacts_from_config
 
 
 def _read_json_file(path: str | None) -> dict[str, Any]:
@@ -115,11 +112,12 @@ def main() -> None:
         overrides["params"] = params
 
     try:
-        if args.config_file:
-            config = load_rag_sidecar_config(args.config_file, overrides=overrides)
-        else:
-            config = RagSidecarBuildConfig.from_mapping(overrides)
-    except ValueError as exc:
+        _, config = resolve_rag_sidecar_config(
+            config_file=args.config_file,
+            overrides=overrides,
+            base_dir=Path.cwd(),
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
         parser.error(str(exc))
 
     summary = write_rag_sidecar_artifacts_from_config(config)

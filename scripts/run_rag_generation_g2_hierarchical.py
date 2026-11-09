@@ -11,9 +11,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from youtube_pipeline.entrypoints.non_daily_rag import (
+    resolve_rag_g2_hierarchical_config,
+)
 from youtube_pipeline.rag_generation_g2_hierarchical import (
-    RagG2HierarchicalConfig,
-    load_rag_g2_hierarchical_config,
     plan_rag_g2_hierarchical_dry_run,
     run_rag_g2_hierarchical_from_config,
 )
@@ -196,14 +197,12 @@ def main() -> None:
         overrides["params"] = params
 
     try:
-        if args.config_file:
-            config = load_rag_g2_hierarchical_config(
-                args.config_file,
-                overrides=overrides,
-            )
-        else:
-            config = RagG2HierarchicalConfig.from_mapping(overrides)
-    except ValueError as exc:
+        _, config = resolve_rag_g2_hierarchical_config(
+            config_file=args.config_file,
+            overrides=overrides,
+            base_dir=Path.cwd(),
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
         parser.error(str(exc))
 
     if args.dry_run:

@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from youtube_pipeline.daily_rag_consumer import main
+from youtube_pipeline.entrypoints.daily_rag_consumer import main
 
 
 if __name__ == "__main__":

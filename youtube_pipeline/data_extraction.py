@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import argparse
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -13,7 +11,6 @@ from typing import Any, Iterable
 
 import pandas as pd
 import requests
-from dotenv import load_dotenv
 
 from .storage import persist_batch_snapshot
 
@@ -585,13 +582,20 @@ def _write_run_metadata(
     return str(output_path)
 
 
-def run_extraction_pipeline(config: ExtractionConfig, logger: logging.Logger) -> dict[str, Any]:
-    load_dotenv()
-    api_key = os.getenv("YOUTUBE_API_KEY")
+def run_extraction_pipeline(
+    config: ExtractionConfig,
+    logger: logging.Logger,
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Run extraction with infrastructure credentials supplied by the caller."""
+
+    if api_key is None:
+        from .entrypoints.youtube_extraction import resolve_youtube_api_key
+
+        api_key = resolve_youtube_api_key()
     if not _is_enabled(api_key):
-        raise RuntimeError(
-            "No se encontro YOUTUBE_API_KEY. Define la variable en .env o entorno."
-        )
+        raise ValueError("api_key must not be empty.")
 
     state = ExtractionState()
     client = YouTubeClient(api_key=str(api_key), config=config, logger=logger)
@@ -626,114 +630,12 @@ def run_extraction_pipeline(config: ExtractionConfig, logger: logging.Logger) ->
     return output
 
 
-def _load_config_from_json(path: str | None) -> dict[str, Any]:
-    if not _is_enabled(path):
-        return {}
-    cfg_path = Path(str(path))
-    if not cfg_path.exists():
-        raise FileNotFoundError(f"No existe el archivo de configuracion: {cfg_path}")
-    return json.loads(cfg_path.read_text(encoding="utf-8"))
-
-
-def _merge_config(cli_args: argparse.Namespace) -> ExtractionConfig:
-    file_payload = _load_config_from_json(cli_args.config_file)
-    config = ExtractionConfig.from_mapping(file_payload)
-
-    overrides = {
-        "query": cli_args.query,
-        "published_after": cli_args.published_after,
-        "published_before": cli_args.published_before,
-        "min_views": cli_args.min_views,
-        "min_comments": cli_args.min_comments,
-        "max_comments": cli_args.max_comments,
-        "max_results": cli_args.max_results,
-        "request_timeout_seconds": cli_args.request_timeout_seconds,
-        "request_pause_seconds": cli_args.request_pause_seconds,
-        "retry_attempts": cli_args.retry_attempts,
-        "retry_backoff_seconds": cli_args.retry_backoff_seconds,
-        "quota_pause_seconds": cli_args.quota_pause_seconds,
-        "save_legacy_csv": cli_args.save_legacy_csv,
-        "data_root": cli_args.data_root,
-        "metadata_path": cli_args.metadata_path,
-    }
-
-    for key, value in overrides.items():
-        if value is not None:
-            setattr(config, key, value)
-
-    # Empty string means "disable filter" as requested.
-    for key in ("query", "published_after", "published_before"):
-        value = getattr(config, key)
-        if isinstance(value, str) and value.strip() == "":
-            setattr(config, key, None)
-
-    return config
-
-
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Extract YouTube videos/comments and persist artifacts for the pipeline."
-    )
-    parser.add_argument("--config-file", default=None, help="Ruta a JSON de configuracion.")
-    parser.add_argument("--query", default=None)
-    parser.add_argument("--published-after", default=None)
-    parser.add_argument("--published-before", default=None)
-    parser.add_argument("--min-views", type=int, default=None)
-    parser.add_argument("--min-comments", type=int, default=None)
-    parser.add_argument("--max-comments", type=int, default=None)
-    parser.add_argument("--max-results", type=int, default=None)
-    parser.add_argument("--request-timeout-seconds", type=float, default=None)
-    parser.add_argument("--request-pause-seconds", type=float, default=None)
-    parser.add_argument("--retry-attempts", type=int, default=None)
-    parser.add_argument("--retry-backoff-seconds", type=float, default=None)
-    parser.add_argument("--quota-pause-seconds", type=float, default=None)
-    parser.add_argument("--data-root", default=None)
-    parser.add_argument("--metadata-path", default=None)
-    legacy_group = parser.add_mutually_exclusive_group()
-    legacy_group.add_argument("--save-legacy-csv", dest="save_legacy_csv", action="store_true")
-    legacy_group.add_argument("--no-save-legacy-csv", dest="save_legacy_csv", action="store_false")
-    parser.set_defaults(save_legacy_csv=None)
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Solo imprime la configuracion final sin llamar la API.",
-    )
-    return parser
-
-
-def _setup_logger(log_level: str) -> logging.Logger:
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format="%(asctime)s | %(levelname)s | %(message)s",
-    )
-    return logging.getLogger("data_extraction")
-
-
 def main() -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args()
-    logger = _setup_logger(args.log_level)
-    config = _merge_config(args)
+    """Compatibility shim; configuration and secrets belong to the entrypoint."""
 
-    if args.dry_run:
-        logger.info("Dry run. Configuracion final: %s", json.dumps(config.as_dict(), ensure_ascii=False))
-        return
+    from .entrypoints.youtube_extraction import main as entrypoint_main
 
-    summary = run_extraction_pipeline(config, logger)
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-    if summary.get("quota_hit"):
-        pause_s = float(config.quota_pause_seconds)
-        if pause_s > 0:
-            logger.warning(
-                "Se detecto cuota agotada. Esperando %.1fs antes de finalizar.", pause_s
-            )
-            time.sleep(pause_s)
+    entrypoint_main()
 
 
 if __name__ == "__main__":

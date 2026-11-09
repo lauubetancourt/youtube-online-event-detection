@@ -1,0 +1,7 @@
+comment_id,video_id,event_time_utc,text
+runtime_c1,video_runtime,2026-06-02T04:58:30Z,synthetic runtime comment 1
+runtime_c2,video_runtime,2026-06-02T04:59:00Z,synthetic runtime comment 2
+runtime_c3,video_runtime,2026-06-02T04:59:30Z,synthetic runtime comment 3
+runtime_c4,video_runtime,2026-06-02T05:00:00Z,synthetic runtime comment 4
+runtime_c5,video_runtime,2026-06-02T05:00:30Z,synthetic runtime comment 5
+runtime_c6,video_runtime,2026-06-02T05:01:00Z,synthetic runtime comment 6

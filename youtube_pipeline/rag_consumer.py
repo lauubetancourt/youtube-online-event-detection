@@ -298,6 +298,15 @@ def _derive_consumer_run_id(config: RagConsumerConfig, sidecar_manifest: dict[st
     )
 
 
+def derive_rag_consumer_run_id(
+    config: RagConsumerConfig,
+    sidecar_manifest: dict[str, Any],
+) -> str:
+    """Return the existing stage identity without changing its formula."""
+
+    return _derive_consumer_run_id(config, sidecar_manifest)
+
+
 def _infer_temporal_roles(inventory: pd.DataFrame) -> pd.DataFrame:
     df = inventory.copy()
     before = df["event_time_utc"] < df["trigger_time_utc"]
@@ -841,6 +850,7 @@ def write_rag_consumer_artifacts(
 __all__ = [
     "RAG_CONSUMER_ARTIFACT_VERSION",
     "RagConsumerConfig",
+    "derive_rag_consumer_run_id",
     "load_rag_consumer_config",
     "write_rag_consumer_artifacts",
     "write_rag_consumer_artifacts_from_config",

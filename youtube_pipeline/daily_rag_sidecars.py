@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from collections import Counter
@@ -13,25 +12,6 @@ import pandas as pd
 
 
 DAILY_RAG_SIDECAR_ARTIFACT_VERSION = "daily_rag_sidecars_v1"
-DEFAULT_SIMULATION_DIR = "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
-DEFAULT_DAILY_EVENTS_PATH = (
-    f"{DEFAULT_SIMULATION_DIR}/daily_frequency_baseline_cooldown_0/"
-    "cycle_daily_frequency_events.jsonl"
-)
-DEFAULT_DAILY_SCORES_PATH = (
-    f"{DEFAULT_SIMULATION_DIR}/daily_frequency_baseline_cooldown_0/"
-    "cycle_daily_frequency_scores.jsonl"
-)
-DEFAULT_DAILY_DETECTOR_MANIFEST_PATH = (
-    f"{DEFAULT_SIMULATION_DIR}/daily_frequency_baseline_cooldown_0/"
-    "cycle_daily_frequency_detector_manifest.json"
-)
-DEFAULT_SIGNAL_SERIES_PATH = f"{DEFAULT_SIMULATION_DIR}/cycle_signal_series.jsonl"
-DEFAULT_WINDOW_INVENTORY_PATH = f"{DEFAULT_SIMULATION_DIR}/cycle_window_inventory.csv"
-DEFAULT_STATEFUL_CONTEXT_PATH = f"{DEFAULT_SIMULATION_DIR}/cycle_stateful_context.json"
-DEFAULT_COMMENTS_PATH = "data/gold/clean_comments.parquet"
-DEFAULT_OUTPUT_DIR = f"{DEFAULT_SIMULATION_DIR}/daily_rag_sidecars"
-
 DAILY_EVENT_EVIDENCE_PACKAGES_FILE = "daily_event_evidence_packages.jsonl"
 DAILY_EVENT_COMMENT_INVENTORY_FILE = "daily_event_comment_inventory.csv"
 DAILY_EVENT_VIDEO_MAP_FILE = "daily_event_video_map.csv"
@@ -76,14 +56,14 @@ COMMENT_REQUIRED_COLUMNS = {"comment_id", "video_id", "event_time_utc", "text"}
 
 @dataclass(frozen=True)
 class DailyRagSidecarBuildConfig:
-    daily_events_path: str = DEFAULT_DAILY_EVENTS_PATH
-    output_dir: str = DEFAULT_OUTPUT_DIR
-    comments_path: str = DEFAULT_COMMENTS_PATH
-    cycle_window_inventory_path: str = DEFAULT_WINDOW_INVENTORY_PATH
-    daily_scores_path: str | None = DEFAULT_DAILY_SCORES_PATH
-    daily_detector_manifest_path: str | None = DEFAULT_DAILY_DETECTOR_MANIFEST_PATH
-    cycle_signal_series_path: str | None = DEFAULT_SIGNAL_SERIES_PATH
-    cycle_stateful_context_path: str | None = DEFAULT_STATEFUL_CONTEXT_PATH
+    daily_events_path: str | Path
+    output_dir: str | Path
+    comments_path: str | Path
+    cycle_window_inventory_path: str | Path
+    daily_scores_path: str | Path | None = None
+    daily_detector_manifest_path: str | Path | None = None
+    cycle_signal_series_path: str | Path | None = None
+    cycle_stateful_context_path: str | Path | None = None
     max_comments_per_context_unit: int = 25
     run_id: str | None = None
     notes: str | None = None
@@ -1227,52 +1207,6 @@ def write_daily_rag_sidecar_artifacts(
     )
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Build non-generative RAG sidecars for daily_frequency_baseline events. "
-            "This does not call LLMs, Serper, embeddings, vectorstores, G-1, or G-2."
-        )
-    )
-    parser.add_argument("--daily-events-path", default=None)
-    parser.add_argument("--daily-scores-path", default=None)
-    parser.add_argument("--daily-detector-manifest-path", default=None)
-    parser.add_argument("--cycle-signal-series-path", default=None)
-    parser.add_argument("--cycle-window-inventory-path", default=None)
-    parser.add_argument("--cycle-stateful-context-path", default=None)
-    parser.add_argument("--comments-path", default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--max-comments-per-context-unit", type=int, default=None)
-    parser.add_argument("--run-id", default=None)
-    parser.add_argument("--notes", default=None)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "daily_events_path": args.daily_events_path,
-            "daily_scores_path": args.daily_scores_path,
-            "daily_detector_manifest_path": args.daily_detector_manifest_path,
-            "cycle_signal_series_path": args.cycle_signal_series_path,
-            "cycle_window_inventory_path": args.cycle_window_inventory_path,
-            "cycle_stateful_context_path": args.cycle_stateful_context_path,
-            "comments_path": args.comments_path,
-            "output_dir": args.output_dir,
-            "max_comments_per_context_unit": args.max_comments_per_context_unit,
-            "run_id": args.run_id,
-            "notes": args.notes,
-        }.items()
-        if value is not None
-    }
-    config = DailyRagSidecarBuildConfig(**overrides)
-    summary = write_daily_rag_sidecar_artifacts_from_config(config)
-    print(json.dumps(_json_safe(summary), indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "DAILY_CONTEXT_UNIT_COMMENT_MAP_FILE",
     "DAILY_EVENT_COMMENT_INVENTORY_FILE",
@@ -1292,7 +1226,3 @@ __all__ = [
     "write_daily_rag_sidecar_artifacts",
     "write_daily_rag_sidecar_artifacts_from_config",
 ]
-
-
-if __name__ == "__main__":
-    main()

@@ -215,7 +215,10 @@ class CyclicStatefulAdapterTests(unittest.TestCase):
     def test_c3_rejects_execution_flags(self) -> None:
         for flag in ["run_monitoring", "run_detection", "run_rag"]:
             with self.assertRaises(ValueError):
-                CyclicStatefulAdapterConfig(**{flag: True}).validate_c3_scope()
+                CyclicStatefulAdapterConfig(
+                    simulation_dir="outputs/cyclic",
+                    **{flag: True},
+                ).validate_c3_scope()
 
 
 if __name__ == "__main__":

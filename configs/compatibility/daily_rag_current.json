@@ -1,0 +1,61 @@
+{
+  "identity": {
+    "run_id": "compatibility_daily_rag_current"
+  },
+  "artifacts": {
+    "run_mode": "development",
+    "trace_level": "minimal"
+  },
+  "rag": {
+    "daily_sidecars": {
+      "daily_events_path": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_frequency_baseline_cooldown_0/cycle_daily_frequency_events.jsonl",
+      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_sidecars",
+      "comments_path": "data/gold/clean_comments.parquet",
+      "cycle_window_inventory_path": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/cycle_window_inventory.csv",
+      "daily_scores_path": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_frequency_baseline_cooldown_0/cycle_daily_frequency_scores.jsonl",
+      "daily_detector_manifest_path": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_frequency_baseline_cooldown_0/cycle_daily_frequency_detector_manifest.json",
+      "cycle_signal_series_path": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/cycle_signal_series.jsonl",
+      "cycle_stateful_context_path": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/cycle_stateful_context.json",
+      "max_comments_per_context_unit": 25,
+      "run_id": "drun_c79d30f6e5a3",
+      "notes": null,
+      "params": {},
+      "run_llm": false,
+      "run_serper": false,
+      "use_embeddings": false,
+      "use_vectorstore": false,
+      "run_g1": false,
+      "run_g2": false
+    },
+    "daily_consumer": {
+      "sidecars_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_sidecars",
+      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_consumer",
+      "run_id": "dragconsumer_ed2f98feca1d",
+      "max_estimated_input_tokens": 16000,
+      "notes": null,
+      "params": {},
+      "run_llm": false,
+      "run_serper": false,
+      "use_embeddings": false,
+      "use_vectorstore": false,
+      "run_g1": false,
+      "run_g2": false
+    },
+    "daily_context_selection": {
+      "consumer_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_consumer",
+      "sidecars_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_sidecars",
+      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_context_selection",
+      "max_selected_tokens_per_event": 16000,
+      "alert_coverage_target": 0.35,
+      "run_id": "dragselect_09f6ade845cc",
+      "notes": null,
+      "params": {},
+      "run_llm": false,
+      "run_serper": false,
+      "use_embeddings": false,
+      "use_vectorstore": false,
+      "run_g1": false,
+      "run_g2": false
+    }
+  }
+}

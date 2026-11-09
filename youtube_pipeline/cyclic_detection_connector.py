@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from dataclasses import dataclass
@@ -9,14 +8,33 @@ from typing import Any
 
 import pandas as pd
 
-from .detectors import create_detector
+from .activity_detection import (
+    ActivityDetectionRouteConfig,
+    DetectionResult,
+    dispatch_activity_observation,
+)
+from .activity_signals import (
+    ActivityObservation,
+    ActivitySignalDefinition,
+    create_activity_signal,
+)
+from .detectors import XiaoEMAConfig, create_detector
+from .detection_alerts import (
+    ACTIVITY,
+    GAP_POLICY_METHODOLOGICAL_STATUS,
+    DetectionGapPolicyConfig,
+    detection_alert_from_result,
+    detection_result_id,
+)
 from .monitoring import default_activity_metrics, default_polarization_metrics
 
 
 DETECTION_CONNECTOR_MODE = "detection_dry_run"
 DETECTION_SMOKE_TEST_MODE = "detection_smoke_test"
-DEFAULT_CANONICAL_DATASET_PATH = "data/gold/clean_comments.parquet"
+ACTIVITY_DETECTION_RUNTIME_MODE = "activity_detection_runtime"
 SMOKE_TEST_OUTPUT_SUBDIR = "detection_smoke_test"
+ACTIVITY_DETECTION_OUTPUT_SUBDIR = "activity_detection_runtime"
+DETECTION_ALERT_ARTIFACT = "detection_alerts.jsonl"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -107,10 +125,10 @@ def _format_timestamp(value: Any) -> str | None:
 
 @dataclass
 class CyclicDetectionConnectorConfig:
-    simulation_dir: str | Path = "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
+    simulation_dir: str | Path
+    canonical_dataset_path: str | Path
     mode: str = DETECTION_CONNECTOR_MODE
     max_cycles: int = 5
-    canonical_dataset_path: str | Path = DEFAULT_CANONICAL_DATASET_PATH
     output_dir: str | Path | None = None
     debug_full_rows: bool = False
     run_monitoring: bool = False
@@ -136,12 +154,20 @@ class CyclicDetectionConnectorConfig:
             return Path(self.output_dir)
         if self.mode == DETECTION_SMOKE_TEST_MODE:
             return self.simulation_path() / SMOKE_TEST_OUTPUT_SUBDIR
+        if self.mode == ACTIVITY_DETECTION_RUNTIME_MODE:
+            return self.simulation_path() / ACTIVITY_DETECTION_OUTPUT_SUBDIR
         return self.simulation_path()
 
     def validate_c4_scope(self) -> None:
-        if self.mode not in {DETECTION_CONNECTOR_MODE, DETECTION_SMOKE_TEST_MODE}:
+        if self.mode not in {
+            DETECTION_CONNECTOR_MODE,
+            DETECTION_SMOKE_TEST_MODE,
+            ACTIVITY_DETECTION_RUNTIME_MODE,
+        }:
             raise ValueError(
-                "C-4 supports mode='detection_dry_run' or mode='detection_smoke_test'."
+                "C-4 supports mode='detection_dry_run', "
+                "mode='detection_smoke_test', or "
+                "mode='activity_detection_runtime'."
             )
         if self.max_cycles < 1:
             raise ValueError("max_cycles must be >= 1.")
@@ -157,7 +183,7 @@ class CyclicDetectionConnectorConfig:
             forbidden["run_detection"] = self.run_detection
         elif self.run_monitoring or self.run_detection:
             raise ValueError(
-                "detection_smoke_test runs the approved controlled path internally; "
+                f"{self.mode} runs its controlled path internally; "
                 "do not pass run_monitoring/run_detection flags."
             )
         enabled = [name for name, value in forbidden.items() if value]
@@ -166,20 +192,6 @@ class CyclicDetectionConnectorConfig:
                 f"C-4 {self.mode} forbids these flags: "
                 + ", ".join(enabled)
             )
-
-
-def load_cyclic_detection_connector_config(
-    config_file: str | Path | None,
-    *,
-    overrides: dict[str, Any] | None = None,
-) -> CyclicDetectionConnectorConfig:
-    payload: dict[str, Any] = {}
-    if config_file:
-        payload = _read_json(Path(config_file))
-    config_payload = payload.get("cyclic_detection_connector", payload)
-    if overrides:
-        config_payload = {**config_payload, **overrides}
-    return CyclicDetectionConnectorConfig.from_mapping(config_payload)
 
 
 def _validate_inputs(
@@ -213,6 +225,7 @@ def _validate_inputs(
         "analysis_window_start_utc",
         "analysis_window_end_utc",
         "data_cutoff_utc",
+        "is_new_in_cycle",
         "is_active_in_window",
         "exited_window",
     }
@@ -705,7 +718,11 @@ def _smoke_quality_row(
     }
 
 
-def run_cyclic_detection_smoke_test(config: CyclicDetectionConnectorConfig) -> dict[str, Any]:
+def run_cyclic_detection_smoke_test(
+    config: CyclicDetectionConnectorConfig,
+    *,
+    xiao_config: XiaoEMAConfig,
+) -> dict[str, Any]:
     simulation_dir = config.simulation_path()
     output_dir = config.output_path()
     adapter_manifest = _read_json(simulation_dir / "cycle_adapter_manifest.json")
@@ -731,7 +748,10 @@ def run_cyclic_detection_smoke_test(config: CyclicDetectionConnectorConfig) -> d
     monitoring_by_cycle = {row["cycle_id"]: row for row in monitoring_inputs}
 
     detector_logs: list[str] = []
-    detector = create_detector(log_fn=detector_logs.append)
+    detector = create_detector(
+        config=xiao_config,
+        log_fn=detector_logs.append,
+    )
     previous_completed_count = 0
     processed_cycle_ids: list[str] = []
     monitoring_outputs: list[dict[str, Any]] = []
@@ -929,10 +949,380 @@ def run_cyclic_detection_smoke_test(config: CyclicDetectionConnectorConfig) -> d
     }
 
 
-def run_cyclic_detection_connector(config: CyclicDetectionConnectorConfig) -> dict[str, Any]:
+def _runtime_events_for_cycle(
+    *,
+    window_inventory: pd.DataFrame,
+    cycle: dict[str, Any],
+    seen_comment_ids: set[str],
+    last_event_time: pd.Timestamp | None,
+) -> tuple[list[dict[str, Any]], pd.Timestamp | None]:
+    cycle_rows = window_inventory.loc[
+        window_inventory["cycle_id"].astype(str) == str(cycle["cycle_id"])
+    ].copy()
+    new_rows = cycle_rows.loc[_bool_series(cycle_rows["is_new_in_cycle"])].copy()
+    if new_rows.empty:
+        return [], last_event_time
+
+    new_rows["comment_id"] = new_rows["comment_id"].astype(str)
+    duplicate_ids = sorted(
+        set(new_rows.loc[new_rows["comment_id"].duplicated(keep=False), "comment_id"])
+        | seen_comment_ids.intersection(new_rows["comment_id"])
+    )
+    if duplicate_ids:
+        raise ValueError(
+            "C-4 activity runtime received a comment more than once; "
+            f"sample={duplicate_ids[:10]}"
+        )
+
+    new_rows["event_time_utc"] = pd.to_datetime(
+        new_rows["event_time_utc"],
+        utc=True,
+        errors="coerce",
+    )
+    invalid_time_count = int(new_rows["event_time_utc"].isna().sum())
+    if invalid_time_count:
+        raise ValueError(
+            "C-4 activity runtime received invalid event_time_utc values; "
+            f"count={invalid_time_count}"
+        )
+
+    cutoff = pd.Timestamp(cycle["data_cutoff_utc"])
+    future_rows = new_rows.loc[new_rows["event_time_utc"] >= cutoff]
+    if not future_rows.empty:
+        raise ValueError(
+            "C-4 activity runtime causal guard failed: event_time_utc must be "
+            "strictly before data_cutoff_utc."
+        )
+
+    ordered = new_rows.sort_values(["event_time_utc", "comment_id"])
+    first_time = pd.Timestamp(ordered.iloc[0]["event_time_utc"])
+    if last_event_time is not None and first_time < last_event_time:
+        raise ValueError(
+            "C-4 activity runtime requires non-decreasing event-time order across cycles."
+        )
+
+    records = ordered.to_dict(orient="records")
+    seen_comment_ids.update(str(record["comment_id"]) for record in records)
+    return records, pd.Timestamp(ordered.iloc[-1]["event_time_utc"])
+
+
+def _activity_detection_result_row(
+    *,
+    run_id: str,
+    cycle: dict[str, Any],
+    observation: ActivityObservation,
+    result: DetectionResult,
+) -> dict[str, Any]:
+    return {
+        "detection_result_id": detection_result_id(run_id=run_id, result=result),
+        "run_id": run_id,
+        "simulation_run_id": cycle["simulation_run_id"],
+        "cycle_id": cycle["cycle_id"],
+        "cycle_index": int(cycle["cycle_index"]),
+        "data_cutoff_utc": cycle["data_cutoff_utc"],
+        "signal_id": result.signal_id,
+        "detector_id": result.detector_id,
+        "observation_time_utc": _format_timestamp(result.observation_time_utc),
+        "window_start_utc": _format_timestamp(observation.window_start_utc),
+        "window_end_utc": _format_timestamp(observation.window_end_utc),
+        "value": observation.value,
+        "support_count": observation.support_count,
+        "quality": result.quality,
+        "triggered": result.triggered,
+        "score": result.score,
+        "detector_metadata": dict(result.detector_metadata),
+    }
+
+
+def run_cyclic_activity_detection_runtime(
+    config: CyclicDetectionConnectorConfig,
+    *,
+    run_id: str,
+    route: ActivityDetectionRouteConfig,
+    signal_definition: ActivitySignalDefinition,
+    detector_config: Any,
+    config_hash: str = "legacy_direct_invocation",
+    gap_policy: DetectionGapPolicyConfig | None = None,
+) -> dict[str, Any]:
+    """Execute one neutral activity-signal route over causally available cycles."""
+
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id must be a non-empty string.")
+    if not isinstance(route, ActivityDetectionRouteConfig):
+        raise TypeError("route must be an ActivityDetectionRouteConfig.")
+    if not isinstance(signal_definition, ActivitySignalDefinition):
+        raise TypeError("signal_definition must be an ActivitySignalDefinition.")
+    if route.signal_id != signal_definition.signal_id:
+        raise ValueError("Activity route signal_id must match the signal definition.")
+    if not isinstance(config_hash, str) or not config_hash.strip():
+        raise ValueError("config_hash must be a non-empty string.")
+    effective_gap_policy = gap_policy or DetectionGapPolicyConfig()
+    if not isinstance(effective_gap_policy, DetectionGapPolicyConfig):
+        raise TypeError("gap_policy must be DetectionGapPolicyConfig or None.")
+    simulation_dir = config.simulation_path()
+    output_dir = config.output_path()
+    adapter_manifest = _read_json(simulation_dir / "cycle_adapter_manifest.json")
+    stateful_context = _read_json(simulation_dir / "cycle_stateful_context.json")
+    monitoring_inputs = _read_jsonl(simulation_dir / "cycle_monitoring_inputs.jsonl")
+    detection_inputs = _read_jsonl(simulation_dir / "cycle_detection_inputs.jsonl")
+    window_inventory = _read_csv(simulation_dir / "cycle_window_inventory.csv")
+    input_errors = _validate_inputs(
+        adapter_manifest=adapter_manifest,
+        monitoring_inputs=monitoring_inputs,
+        detection_inputs=detection_inputs,
+        window_inventory=window_inventory,
+    )
+    if input_errors:
+        raise ValueError(
+            "C-4 activity runtime input validation failed: " + "; ".join(input_errors)
+        )
+
+    selected_cycles, pending_cycle_ids = _selected_cycles(
+        detection_inputs,
+        max_cycles=config.max_cycles,
+    )
+    detector = create_detector(name=route.detector_id, config=detector_config)
+    signal = create_activity_signal(signal_definition)
+    detectors = {route.detector_id: detector}
+
+    seen_comment_ids: set[str] = set()
+    observation_keys: set[tuple[str, str]] = set()
+    result_rows: list[dict[str, Any]] = []
+    alert_rows: list[dict[str, Any]] = []
+    cycle_rows: list[dict[str, Any]] = []
+    last_event_time: pd.Timestamp | None = None
+    last_observation_time: pd.Timestamp | None = None
+
+    for cycle in selected_cycles:
+        events, last_event_time = _runtime_events_for_cycle(
+            window_inventory=window_inventory,
+            cycle=cycle,
+            seen_comment_ids=seen_comment_ids,
+            last_event_time=last_event_time,
+        )
+        cycle_result_start = len(result_rows)
+        cycle_trigger_start = sum(int(row["triggered"]) for row in result_rows)
+        cutoff = pd.Timestamp(cycle["data_cutoff_utc"])
+
+        for event in events:
+            for observation in signal.on_event(event):
+                observation_time = pd.Timestamp(observation.observation_time_utc)
+                if observation_time > cutoff:
+                    raise ValueError(
+                        "C-4 activity runtime emitted an observation after its "
+                        "cycle data cutoff."
+                    )
+                if (
+                    last_observation_time is not None
+                    and observation_time < last_observation_time
+                ):
+                    raise ValueError(
+                        "C-4 activity runtime requires non-decreasing observation order."
+                    )
+                observation_key = (
+                    observation.signal.signal_id,
+                    observation_time.isoformat(),
+                )
+                if observation_key in observation_keys:
+                    raise ValueError(
+                        "C-4 activity runtime attempted to dispatch an observation twice."
+                    )
+                observation_keys.add(observation_key)
+                result = dispatch_activity_observation(
+                    route=route,
+                    observation=observation,
+                    detectors=detectors,
+                )
+                result_rows.append(
+                    _activity_detection_result_row(
+                        run_id=run_id,
+                        cycle=cycle,
+                        observation=observation,
+                        result=result,
+                    )
+                )
+                alert = detection_alert_from_result(
+                    result,
+                    run_id=run_id,
+                    config_hash=config_hash,
+                    signal_family=ACTIVITY,
+                    support_count=observation.support_count,
+                    data_cutoff_utc=cutoff.to_pydatetime(),
+                    detection_artifact_ref="activity_detection_results.jsonl",
+                )
+                if alert is not None:
+                    alert_rows.append(alert.to_mapping())
+                last_observation_time = observation_time
+
+        cycle_results = len(result_rows) - cycle_result_start
+        cycle_triggers = (
+            sum(int(row["triggered"]) for row in result_rows) - cycle_trigger_start
+        )
+        cycle_rows.append(
+            {
+                "run_id": run_id,
+                "simulation_run_id": cycle["simulation_run_id"],
+                "cycle_id": cycle["cycle_id"],
+                "cycle_index": int(cycle["cycle_index"]),
+                "data_cutoff_utc": cycle["data_cutoff_utc"],
+                "detection_status": "executed",
+                "signal_id": route.signal_id,
+                "detector_id": route.detector_id,
+                "input_events_count": len(events),
+                "observations_emitted": cycle_results,
+                "detection_results_produced": cycle_results,
+                "trigger_count": cycle_triggers,
+                "future_leak_count": 0,
+                "ordering_status": "passed",
+            }
+        )
+
+    trigger_count = sum(int(row["triggered"]) for row in result_rows)
+    manifest = {
+        "schema_version": "1",
+        "run_id": run_id,
+        "config_hash": config_hash,
+        "simulation_run_id": adapter_manifest["simulation_run_id"],
+        "stage": "C-4",
+        "mode": ACTIVITY_DETECTION_RUNTIME_MODE,
+        "status": "executed",
+        "detection_status": "executed",
+        "signal_id": route.signal_id,
+        "detector_id": route.detector_id,
+        "methodological_status": "RUNTIME_INTEGRATION_ONLY",
+        "input_source": {
+            "role": "PROVISIONAL_RUNTIME_INPUT",
+            "artifact": "cycle_window_inventory.csv",
+            "final_preprocessing_authority": False,
+        },
+        "counts": {
+            "processed_cycles": len(selected_cycles),
+            "pending_cycles": len(pending_cycle_ids),
+            "input_events": len(seen_comment_ids),
+            "observations_emitted": len(result_rows),
+            "detection_results_produced": len(result_rows),
+            "triggered_results": trigger_count,
+            "detection_alerts": len(alert_rows),
+        },
+        "causality": {
+            "event_visibility_rule": "event_time_utc < data_cutoff_utc",
+            "observation_cutoff_rule": "observation_time_utc <= data_cutoff_utc",
+            "future_leak_count": 0,
+            "ordering": "non_decreasing",
+            "duplicate_dispatch_count": 0,
+        },
+        "stateful_policy": {
+            "detector_instances_per_route": 1,
+            "preserve_state_between_observations": True,
+            "preserve_state_between_cycles": True,
+            "detector_reset_between_cycles": False,
+            "checkpoint_status": "deferred_to_A9",
+            "comments_seen_count_from_c3": stateful_context.get("seen_comment_count"),
+        },
+        "gap_policy": {
+            "policy_id": effective_gap_policy.policy_id,
+            "configuration_status": (
+                "explicit" if gap_policy is not None else "legacy_implicit_equivalent"
+            ),
+            "behavior": "skip_absent_value_preserve_detector_state",
+            "methodological_status": GAP_POLICY_METHODOLOGICAL_STATUS,
+            "activity_absent_statuses_currently_emitted": False,
+        },
+        "alerts": {
+            "signal_family": ACTIVITY,
+            "production_rule": "triggered_detection_results_only",
+            "count": len(alert_rows),
+            "future_association_status": "not_executed",
+        },
+        "output_artifacts": {
+            "activity_detection_results": "activity_detection_results.jsonl",
+            "cycle_activity_detection_outputs": (
+                "cycle_activity_detection_outputs.jsonl"
+            ),
+            "activity_detection_manifest": "activity_detection_manifest.json",
+            "detection_alerts": DETECTION_ALERT_ARTIFACT,
+        },
+        "downstream": {
+            "event_candidate_runtime": "not_executed",
+            "evidence": "not_executed",
+            "rag": "not_executed",
+        },
+    }
+
+    results_path = output_dir / "activity_detection_results.jsonl"
+    cycle_outputs_path = output_dir / "cycle_activity_detection_outputs.jsonl"
+    manifest_path = output_dir / "activity_detection_manifest.json"
+    alert_path = output_dir / DETECTION_ALERT_ARTIFACT
+    _write_jsonl(results_path, result_rows)
+    _write_jsonl(cycle_outputs_path, cycle_rows)
+    _write_jsonl(alert_path, alert_rows)
+    _write_json(manifest_path, manifest)
+
+    return {
+        "run_id": run_id,
+        "simulation_run_id": str(adapter_manifest["simulation_run_id"]),
+        "simulation_dir": str(simulation_dir),
+        "output_dir": str(output_dir),
+        "mode": ACTIVITY_DETECTION_RUNTIME_MODE,
+        "status": "executed",
+        "detector_id": route.detector_id,
+        "signal_id": route.signal_id,
+        "processed_cycle_count": len(selected_cycles),
+        "pending_cycle_count": len(pending_cycle_ids),
+        "observations_emitted": len(result_rows),
+        "detection_results_produced": len(result_rows),
+        "trigger_count": trigger_count,
+        "alert_count": len(alert_rows),
+        "runtime_errors": 0,
+        "artifacts": {
+            "activity_detection_results": str(results_path),
+            "cycle_activity_detection_outputs": str(cycle_outputs_path),
+            "activity_detection_manifest": str(manifest_path),
+            "detection_alerts": str(alert_path),
+        },
+    }
+
+
+def run_cyclic_detection_connector(
+    config: CyclicDetectionConnectorConfig,
+    *,
+    xiao_config: XiaoEMAConfig | None = None,
+    run_id: str | None = None,
+    activity_route: ActivityDetectionRouteConfig | None = None,
+    signal_definition: ActivitySignalDefinition | None = None,
+    detector_config: Any = None,
+    config_hash: str = "legacy_direct_invocation",
+    gap_policy: DetectionGapPolicyConfig | None = None,
+) -> dict[str, Any]:
     config.validate_c4_scope()
+    if config.mode == ACTIVITY_DETECTION_RUNTIME_MODE:
+        if run_id is None or activity_route is None or signal_definition is None:
+            raise ValueError(
+                "activity_detection_runtime requires run_id, activity_route, "
+                "and signal_definition."
+            )
+        if detector_config is None:
+            raise ValueError(
+                "activity_detection_runtime requires the selected detector config."
+            )
+        return run_cyclic_activity_detection_runtime(
+            config,
+            run_id=run_id,
+            route=activity_route,
+            signal_definition=signal_definition,
+            detector_config=detector_config,
+            config_hash=config_hash,
+            gap_policy=gap_policy,
+        )
+
+    effective_xiao_config = xiao_config or XiaoEMAConfig()
+    if not isinstance(effective_xiao_config, XiaoEMAConfig):
+        raise TypeError("xiao_config must be XiaoEMAConfig or None.")
     if config.mode == DETECTION_SMOKE_TEST_MODE:
-        return run_cyclic_detection_smoke_test(config)
+        return run_cyclic_detection_smoke_test(
+            config,
+            xiao_config=effective_xiao_config,
+        )
     simulation_dir = config.simulation_path()
     adapter_manifest = _read_json(simulation_dir / "cycle_adapter_manifest.json")
     stateful_context = _read_json(simulation_dir / "cycle_stateful_context.json")
@@ -1099,61 +1489,9 @@ def run_cyclic_detection_connector(config: CyclicDetectionConnectorConfig) -> di
     }
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run C-4 cyclic detection connector modes. detection_dry_run prepares "
-            "contracts only; detection_smoke_test resolves active comments against "
-            "Gold in memory and executes the approved small monitoring/detection "
-            "smoke path. Neither mode executes RAG, LLMs, Serper, embeddings, or "
-            "vectorstores."
-        )
-    )
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument("--simulation-dir", default=None)
-    parser.add_argument("--mode", default=None)
-    parser.add_argument("--max-cycles", type=int, default=None)
-    parser.add_argument("--canonical-dataset-path", default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--debug-full-rows", action="store_true")
-    parser.add_argument("--run-monitoring", action="store_true")
-    parser.add_argument("--run-detection", action="store_true")
-    parser.add_argument("--run-rag", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "simulation_dir": args.simulation_dir,
-            "mode": args.mode,
-            "max_cycles": args.max_cycles,
-            "canonical_dataset_path": args.canonical_dataset_path,
-            "output_dir": args.output_dir,
-            "debug_full_rows": args.debug_full_rows,
-            "run_monitoring": args.run_monitoring,
-            "run_detection": args.run_detection,
-            "run_rag": args.run_rag,
-        }.items()
-        if value is not None
-    }
-    try:
-        config = load_cyclic_detection_connector_config(args.config_file, overrides=overrides)
-        summary = run_cyclic_detection_connector(config)
-    except ValueError as exc:
-        parser.error(str(exc))
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-
 __all__ = [
+    "ACTIVITY_DETECTION_RUNTIME_MODE",
     "CyclicDetectionConnectorConfig",
-    "load_cyclic_detection_connector_config",
+    "run_cyclic_activity_detection_runtime",
     "run_cyclic_detection_connector",
 ]
-
-
-if __name__ == "__main__":
-    main()

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -13,16 +12,6 @@ import pandas as pd
 
 
 DAILY_CONTEXT_SELECTION_ARTIFACT_VERSION = "daily_rag_context_selection_v1"
-DEFAULT_DAILY_RAG_CONSUMER_DIR = (
-    "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_consumer"
-)
-DEFAULT_DAILY_RAG_SIDECARS_DIR = (
-    "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_sidecars"
-)
-DEFAULT_OUTPUT_DIR = (
-    "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_context_selection"
-)
-
 DAILY_RAG_VALIDATION_INPUTS_FILE = "daily_rag_validation_inputs.jsonl"
 DAILY_RAG_CONTEXT_PAYLOADS_FILE = "daily_rag_context_payloads.jsonl"
 DAILY_RAG_CONTEXT_SIZE_REPORT_FILE = "daily_rag_context_size_report.jsonl"
@@ -42,9 +31,9 @@ DAILY_CONTEXT_SELECTION_UNIT_MAP_FILE = "daily_context_selection_unit_map.csv"
 
 @dataclass(frozen=True)
 class DailyContextSelectionConfig:
-    consumer_dir: str = DEFAULT_DAILY_RAG_CONSUMER_DIR
-    sidecars_dir: str = DEFAULT_DAILY_RAG_SIDECARS_DIR
-    output_dir: str = DEFAULT_OUTPUT_DIR
+    consumer_dir: str | Path | None = None
+    sidecars_dir: str | Path | None = None
+    output_dir: str | Path | None = None
     max_selected_tokens_per_event: int = 16_000
     alert_coverage_target: float = 0.35
     run_id: str | None = None
@@ -90,6 +79,12 @@ class DailyContextSelectionConfig:
                 "Daily context selection is non-generative. These flags must remain false: "
                 + ", ".join(enabled)
             )
+        if self.consumer_dir is None:
+            raise ValueError("consumer_dir is required.")
+        if self.sidecars_dir is None:
+            raise ValueError("sidecars_dir is required.")
+        if self.output_dir is None:
+            raise ValueError("output_dir is required.")
 
 
 def _utc_now_iso() -> str:
@@ -933,51 +928,9 @@ def write_daily_context_selection_artifacts(**kwargs: Any) -> dict[str, Any]:
     )
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Select deterministic non-generative context for daily RAG events. "
-            "This does not call LLMs, Serper, embeddings, vectorstores, G-1, or G-2."
-        )
-    )
-    parser.add_argument("--consumer-dir", default=None)
-    parser.add_argument("--sidecars-dir", default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--run-id", default=None)
-    parser.add_argument("--max-selected-tokens-per-event", type=int, default=None)
-    parser.add_argument("--alert-coverage-target", type=float, default=None)
-    parser.add_argument("--notes", default=None)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "consumer_dir": args.consumer_dir,
-            "sidecars_dir": args.sidecars_dir,
-            "output_dir": args.output_dir,
-            "run_id": args.run_id,
-            "max_selected_tokens_per_event": args.max_selected_tokens_per_event,
-            "alert_coverage_target": args.alert_coverage_target,
-            "notes": args.notes,
-        }.items()
-        if value is not None
-    }
-    config = DailyContextSelectionConfig(**overrides)
-    summary = write_daily_context_selection_artifacts_from_config(config)
-    print(json.dumps(_json_safe(summary), indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "DAILY_CONTEXT_SELECTION_ARTIFACT_VERSION",
     "DailyContextSelectionConfig",
     "write_daily_context_selection_artifacts",
     "write_daily_context_selection_artifacts_from_config",
 ]
-
-
-if __name__ == "__main__":
-    main()

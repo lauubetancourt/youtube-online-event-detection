@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,7 +84,7 @@ def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
 
 @dataclass
 class CyclicOrchestratorConfig:
-    simulation_dir: str | Path = "experiments/xiao/media/log_3/cyclic_ingestion_simulation"
+    simulation_dir: str | Path
     run_monitoring: bool = False
     run_detection: bool = False
     run_rag: bool = False
@@ -117,21 +116,6 @@ class CyclicOrchestratorConfig:
                 "C-2 is a dry-run orchestrator only. These flags must remain false: "
                 + ", ".join(enabled)
             )
-
-
-def load_cyclic_orchestrator_config(
-    config_file: str | Path | None,
-    *,
-    overrides: dict[str, Any] | None = None,
-) -> CyclicOrchestratorConfig:
-    payload: dict[str, Any] = {}
-    if config_file:
-        path = Path(config_file)
-        payload = _read_json(path)
-    config_payload = payload.get("cyclic_ingestion_orchestrator", payload)
-    if overrides:
-        config_payload = {**config_payload, **overrides}
-    return CyclicOrchestratorConfig.from_mapping(config_payload)
 
 
 def _validate_manifest_contract(manifest: dict[str, Any]) -> list[str]:
@@ -499,64 +483,10 @@ def run_cyclic_orchestrator_dry_run(config: CyclicOrchestratorConfig) -> dict[st
     }
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run C-2 cyclic ingestion orchestration in dry-run mode. This validates "
-            "cycle contracts and records deterministic cycle states without running "
-            "monitoring, detection, RAG, LLMs, Serper, embeddings, or vectorstores."
-        )
-    )
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument(
-        "--simulation-dir",
-        default=None,
-        help="Directory containing C-0/C-1 cyclic ingestion artifacts.",
-    )
-    parser.add_argument("--run-monitoring", action="store_true")
-    parser.add_argument("--run-detection", action="store_true")
-    parser.add_argument("--run-rag", action="store_true")
-    parser.add_argument(
-        "--no-update-cycle-state",
-        dest="update_cycle_state",
-        action="store_false",
-        help="Write orchestration manifest/plan but leave cycle_state.json untouched.",
-    )
-    parser.set_defaults(update_cycle_state=None)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "simulation_dir": args.simulation_dir,
-            "run_monitoring": args.run_monitoring,
-            "run_detection": args.run_detection,
-            "run_rag": args.run_rag,
-            "update_cycle_state": args.update_cycle_state,
-        }.items()
-        if value is not None
-    }
-    try:
-        config = load_cyclic_orchestrator_config(args.config_file, overrides=overrides)
-        summary = run_cyclic_orchestrator_dry_run(config)
-    except ValueError as exc:
-        parser.error(str(exc))
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "APPROVED_CYCLE_STATES",
     "CyclicOrchestratorConfig",
     "build_orchestration_plan",
-    "load_cyclic_orchestrator_config",
     "run_cyclic_orchestrator_dry_run",
     "validate_cycle_contracts",
 ]
-
-
-if __name__ == "__main__":
-    main()

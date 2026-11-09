@@ -4,13 +4,19 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import ANY, patch
 
 import pandas as pd
 
+from youtube_pipeline.configuration import resolve_run_config, run_config_from_mapping
 from youtube_pipeline.cyclic_detection_connector import (
     CyclicDetectionConnectorConfig,
     run_cyclic_detection_connector,
 )
+from youtube_pipeline.entrypoints.cyclic_detection_connector import (
+    load_legacy_detection_connector_config,
+)
+from youtube_pipeline.detectors import XiaoEMAConfig, create_detector
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -191,6 +197,7 @@ class CyclicDetectionConnectorTests(unittest.TestCase):
             summary = run_cyclic_detection_connector(
                 CyclicDetectionConnectorConfig(
                     simulation_dir=simulation_dir,
+                    canonical_dataset_path="prepared/comments.parquet",
                     max_cycles=2,
                 )
             )
@@ -222,6 +229,7 @@ class CyclicDetectionConnectorTests(unittest.TestCase):
             run_cyclic_detection_connector(
                 CyclicDetectionConnectorConfig(
                     simulation_dir=simulation_dir,
+                    canonical_dataset_path="prepared/comments.parquet",
                     max_cycles=3,
                 )
             )
@@ -238,11 +246,17 @@ class CyclicDetectionConnectorTests(unittest.TestCase):
     def test_c4_rejects_forbidden_execution_flags(self) -> None:
         for flag in ["run_monitoring", "run_detection", "run_rag"]:
             with self.assertRaises(ValueError):
-                CyclicDetectionConnectorConfig(**{flag: True}).validate_c4_scope()
+                CyclicDetectionConnectorConfig(
+                    simulation_dir="outputs/cyclic",
+                    canonical_dataset_path="prepared/comments.parquet",
+                    **{flag: True},
+                ).validate_c4_scope()
 
     def test_c4_rejects_debug_full_rows_without_approval(self) -> None:
         with self.assertRaises(ValueError):
             CyclicDetectionConnectorConfig(
+                simulation_dir="outputs/cyclic",
+                canonical_dataset_path="prepared/comments.parquet",
                 mode="detection_smoke_test",
                 debug_full_rows=True,
             ).validate_c4_scope()
@@ -309,6 +323,34 @@ class CyclicDetectionConnectorTests(unittest.TestCase):
             self.assertNotIn("comment_ids", monitoring[0])
             self.assertNotIn("comment_ids", detection[0])
 
+    def test_detection_smoke_test_receives_explicit_xiao_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            simulation_dir = base / "cyclic"
+            gold_path = base / "clean_comments.parquet"
+            self._write_artifacts(simulation_dir)
+            self._write_gold(gold_path)
+            xiao_config = XiaoEMAConfig()
+
+            with patch(
+                "youtube_pipeline.cyclic_detection_connector.create_detector",
+                wraps=create_detector,
+            ) as detector_factory:
+                run_cyclic_detection_connector(
+                    CyclicDetectionConnectorConfig(
+                        simulation_dir=simulation_dir,
+                        mode="detection_smoke_test",
+                        max_cycles=2,
+                        canonical_dataset_path=gold_path,
+                    ),
+                    xiao_config=xiao_config,
+                )
+
+            detector_factory.assert_called_once_with(
+                config=xiao_config,
+                log_fn=ANY,
+            )
+
     def test_detection_smoke_test_rejects_duplicate_gold_comment_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -331,9 +373,70 @@ class CyclicDetectionConnectorTests(unittest.TestCase):
         for flag in ["run_monitoring", "run_detection", "run_rag"]:
             with self.assertRaises(ValueError):
                 CyclicDetectionConnectorConfig(
+                    simulation_dir="outputs/cyclic",
+                    canonical_dataset_path="prepared/comments.parquet",
                     mode="detection_smoke_test",
                     **{flag: True},
                 ).validate_c4_scope()
+
+    def test_common_resolver_matches_legacy_dry_run_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            common_dir = base / "common"
+            legacy_dir = base / "legacy"
+            self._write_artifacts(common_dir)
+            self._write_artifacts(legacy_dir)
+            run = run_config_from_mapping(
+                {
+                    "identity": {"run_id": "run_detection_connector"},
+                    "detection": {
+                        "connector": {
+                            "simulation_dir": "common",
+                            "canonical_dataset_path": "prepared/comments.parquet",
+                            "max_cycles": 2,
+                        }
+                    },
+                }
+            )
+            common_config = resolve_run_config(
+                run,
+                base_dir=base,
+            ).config.detection.connector
+            legacy_config = load_legacy_detection_connector_config(
+                None,
+                overrides={
+                    "simulation_dir": legacy_dir,
+                    "canonical_dataset_path": "prepared/comments.parquet",
+                    "max_cycles": 2,
+                },
+            )
+
+            common_summary = run_cyclic_detection_connector(common_config)
+            legacy_summary = run_cyclic_detection_connector(legacy_config)
+
+            comparable_keys = {
+                "simulation_run_id",
+                "mode",
+                "processed_cycle_count",
+                "pending_cycle_count",
+                "failed_quality_count",
+                "events_detected_count",
+            }
+            self.assertEqual(
+                {key: common_summary[key] for key in comparable_keys},
+                {key: legacy_summary[key] for key in comparable_keys},
+            )
+            for artifact in (
+                "cycle_monitoring_outputs.jsonl",
+                "cycle_detection_outputs.jsonl",
+                "cycle_detection_quality_report.jsonl",
+                "cycle_event_registry.jsonl",
+            ):
+                with self.subTest(artifact=artifact):
+                    self.assertEqual(
+                        (common_dir / artifact).read_text(encoding="utf-8"),
+                        (legacy_dir / artifact).read_text(encoding="utf-8"),
+                    )
 
 
 if __name__ == "__main__":

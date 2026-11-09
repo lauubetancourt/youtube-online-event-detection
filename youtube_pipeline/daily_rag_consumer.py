@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from collections import Counter
@@ -13,13 +12,6 @@ import pandas as pd
 
 
 DAILY_RAG_CONSUMER_ARTIFACT_VERSION = "daily_rag_consumer_stub_v1"
-DEFAULT_DAILY_RAG_SIDECARS_DIR = (
-    "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_sidecars"
-)
-DEFAULT_DAILY_RAG_CONSUMER_DIR = (
-    "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_rag_consumer"
-)
-
 DAILY_EVENT_EVIDENCE_PACKAGES_FILE = "daily_event_evidence_packages.jsonl"
 DAILY_EVENT_COMMENT_INVENTORY_FILE = "daily_event_comment_inventory.csv"
 DAILY_EVENT_VIDEO_MAP_FILE = "daily_event_video_map.csv"
@@ -98,8 +90,8 @@ REQUIRED_CONTEXT_MAP_COLUMNS = {
 
 @dataclass(frozen=True)
 class DailyRagConsumerConfig:
-    sidecars_dir: str = DEFAULT_DAILY_RAG_SIDECARS_DIR
-    output_dir: str = DEFAULT_DAILY_RAG_CONSUMER_DIR
+    sidecars_dir: str | Path | None = None
+    output_dir: str | Path | None = None
     run_id: str | None = None
     max_estimated_input_tokens: int = 16_000
     notes: str | None = None
@@ -142,6 +134,10 @@ class DailyRagConsumerConfig:
                 "Daily RAG consumer is non-generative. These flags must remain false: "
                 + ", ".join(enabled)
             )
+        if self.sidecars_dir is None:
+            raise ValueError("sidecars_dir is required.")
+        if self.output_dir is None:
+            raise ValueError("output_dir is required.")
 
 
 def _utc_now_iso() -> str:
@@ -853,47 +849,9 @@ def write_daily_rag_consumer_artifacts(**kwargs: Any) -> dict[str, Any]:
     )
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Build non-generative daily RAG consumer payloads from daily RAG sidecars. "
-            "This does not call LLMs, Serper, embeddings, vectorstores, G-1, or G-2."
-        )
-    )
-    parser.add_argument("--sidecars-dir", default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--run-id", default=None)
-    parser.add_argument("--max-estimated-input-tokens", type=int, default=None)
-    parser.add_argument("--notes", default=None)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
-    overrides = {
-        key: value
-        for key, value in {
-            "sidecars_dir": args.sidecars_dir,
-            "output_dir": args.output_dir,
-            "run_id": args.run_id,
-            "max_estimated_input_tokens": args.max_estimated_input_tokens,
-            "notes": args.notes,
-        }.items()
-        if value is not None
-    }
-    config = DailyRagConsumerConfig(**overrides)
-    summary = write_daily_rag_consumer_artifacts_from_config(config)
-    print(json.dumps(_json_safe(summary), indent=2, ensure_ascii=False))
-
-
 __all__ = [
     "DAILY_RAG_CONSUMER_ARTIFACT_VERSION",
     "DailyRagConsumerConfig",
     "write_daily_rag_consumer_artifacts",
     "write_daily_rag_consumer_artifacts_from_config",
 ]
-
-
-if __name__ == "__main__":
-    main()

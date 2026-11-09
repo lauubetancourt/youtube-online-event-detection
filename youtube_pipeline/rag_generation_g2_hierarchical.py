@@ -9,6 +9,14 @@ from typing import Any
 
 import pandas as pd
 
+from youtube_pipeline.external_publication_time import (
+    CAUSALLY_AVAILABLE,
+    FUTURE_RELATIVE_TO_CUTOFF,
+    SAME_DAY_TIME_UNKNOWN,
+    external_publication_time_from_record,
+    parse_external_publication_time,
+    temporal_relation_to_cutoff,
+)
 from youtube_pipeline.rag_generation_g1 import (
     OPENAI_RESPONSES_URL,
     _check_model_available,
@@ -40,11 +48,29 @@ from youtube_pipeline.rag_generation_g2 import (
     _temporal_relation,
     _tokens,
 )
+from youtube_pipeline.validation_status import (
+    CONFIRMED,
+    INSUFFICIENT_EVIDENCE,
+    NOT_CONFIRMED,
+    normalize_validation_status,
+)
+from youtube_pipeline.validation_state import (
+    COMPLETE,
+    EXECUTED,
+    FAILED,
+    INVALID_CITATION,
+    INVALID_QUERY,
+    MISSING_PAYLOAD,
+    PARTIAL,
+    PENDING_BATCHES,
+    PROVIDER_ERROR,
+    VIDEO_FAILURES,
+)
 
 
-RAG_G2H_ARTIFACT_VERSION = "rag_generation_g2_hierarchical_v2"
-QUERY_PROMPT_VERSION = "rag_video_news_query_prompt_v0.2"
-VALIDATION_PROMPT_VERSION = "rag_video_validation_g2_prompt_v0.2"
+RAG_G2H_ARTIFACT_VERSION = "rag_generation_g2_hierarchical_v4"
+QUERY_PROMPT_VERSION = "rag_video_news_query_prompt_v0.3"
+VALIDATION_PROMPT_VERSION = "rag_video_validation_g2_prompt_v0.3"
 
 RAG_VALIDATION_INPUTS_FILE = "rag_validation_inputs.jsonl"
 RAG_CONTEXT_PAYLOADS_FILE = "rag_context_payloads.jsonl"
@@ -73,11 +99,17 @@ DEFAULT_MAX_LLM_CALLS_PER_BATCH = 100
 DEFAULT_MAX_SERPER_CALLS_PER_BATCH = 50
 DEFAULT_MAX_ESTIMATED_COST_USD_PER_BATCH = 1.0
 DEFAULT_BATCH_INDEX = 1
-CLAIM_QUERY_STATUS_VALUES = {
-    "not_applicable",
-    "no_clear_factual_claim",
-    "multiple_claims_no_selection_policy",
-    "registered_not_executed",
+DETERMINISTIC_METADATA = "DETERMINISTIC_METADATA"
+LLM_FALLBACK = "LLM_FALLBACK"
+QUERY_GENERATION_MODE_VALUES = {DETERMINISTIC_METADATA, LLM_FALLBACK}
+FALLBACK_QUERY_REASONING = "low"
+FALLBACK_QUERY_MAX_OUTPUT_TOKENS = 512
+_GENERIC_VIDEO_TITLES = {
+    "video",
+    "en vivo",
+    "live",
+    "stream",
+    "untitled",
 }
 VIDEO_BATCH_STATUS_VALUES = {
     "processed",
@@ -128,6 +160,7 @@ class RagG2HierarchicalConfig:
     serper_timeout_seconds: int = 60
     notes: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    external_evidence_cutoff_utc: str | None = None
 
     @classmethod
     def from_mapping(cls, payload: dict[str, Any]) -> "RagG2HierarchicalConfig":
@@ -203,6 +236,9 @@ class RagG2HierarchicalConfig:
             serper_timeout_seconds=int(payload.get("serper_timeout_seconds", 60)),
             notes=payload.get("notes"),
             params=params,
+            external_evidence_cutoff_utc=payload.get(
+                "external_evidence_cutoff_utc"
+            ),
         )
 
 
@@ -254,6 +290,10 @@ def _validate_config(
 ) -> None:
     if config.provider != "openai":
         raise ValueError("G-2 hierarchical currently supports only provider='openai'.")
+    if config.external_evidence_cutoff_utc is not None:
+        cutoff = pd.Timestamp(config.external_evidence_cutoff_utc)
+        if cutoff.tzinfo is None:
+            raise ValueError("external_evidence_cutoff_utc must be timezone-aware.")
     if require_single_event and _is_all_events_request(config.event_id):
         raise ValueError("event_id is required for real G-2 execution.")
     if config.batch_index < 1:
@@ -340,6 +380,12 @@ def _search_window(trigger_time_utc: str, days_before: int, days_after: int) -> 
     start = (trigger.date() - timedelta(days=days_before)).isoformat()
     end = (trigger.date() + timedelta(days=days_after)).isoformat()
     return start, end
+
+
+def _bounded_search_end(search_end: str, cutoff_utc: str | None) -> str:
+    if cutoff_utc is None:
+        return search_end
+    return min(search_end, pd.Timestamp(cutoff_utc).date().isoformat())
 
 
 def _comment_excerpt(comment: dict[str, Any]) -> dict[str, Any]:
@@ -550,7 +596,9 @@ def _select_video_batch(
             validation_input=validation_input,
             bundle=bundle,
         )
-        estimated_llm_calls = 2
+        estimated_llm_calls = 1 + int(
+            not has_sufficient_search_metadata(bundle)
+        )
         estimated_serper_calls = 1
         estimated_cost = _estimate_incremental_cost_usd(
             config=config,
@@ -716,26 +764,9 @@ def _query_response_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "primary_event_query": {"type": "string"},
-            "claim_verification_query": {"type": ["string", "null"]},
-            "claim_query_status": {
-                "type": "string",
-                "enum": sorted(CLAIM_QUERY_STATUS_VALUES),
-            },
-            "input_context_summary": {"type": "string"},
-            "primary_query_rationale": {"type": "string"},
-            "claim_query_rationale": {"type": "string"},
-            "limitations": {"type": "array", "items": {"type": "string"}},
+            "query": {"type": "string"},
         },
-        "required": [
-            "primary_event_query",
-            "claim_verification_query",
-            "claim_query_status",
-            "input_context_summary",
-            "primary_query_rationale",
-            "claim_query_rationale",
-            "limitations",
-        ],
+        "required": ["query"],
     }
 
 
@@ -745,54 +776,82 @@ def _build_video_query_payload(
     bundle: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "event_id": validation_input.get("event_id"),
         "video_id": bundle["video_id"],
-        "trigger_time_utc": validation_input.get("trigger_time_utc"),
-        "window_start_utc": validation_input.get("window_start_utc"),
-        "window_end_utc": validation_input.get("window_end_utc"),
         "video": {
             "video_id": bundle["video"].get("video_id"),
             "title": bundle["video"].get("title"),
             "channel_title": bundle["video"].get("channel_title"),
-            "inventory_comment_count": bundle["video"].get("inventory_comment_count"),
         },
-        "associated_context_unit_ids": bundle["associated_context_unit_ids"],
-        "source_comment_ids": bundle["source_comment_ids"],
         "context_units": [
             {
                 "context_unit_id": unit.get("context_unit_id"),
                 "context_type": unit.get("context_type"),
-                "video_id": unit.get("video_id"),
-                "time_start_utc": unit.get("time_start_utc"),
-                "time_end_utc": unit.get("time_end_utc"),
-                "comment_count": unit.get("comment_count"),
-                "context_text": unit.get("context_text"),
+                "comment_ids": unit.get("comment_ids", []),
             }
             for unit in bundle["context_units"]
         ],
         "comments": [_comment_excerpt(comment) for comment in bundle["comments"]],
         "query_constraints": {
-            "max_words": 8,
+            "target_words": "4-10",
             "language": "es",
             "must_use_only_this_video_evidence": True,
             "do_not_use_other_videos_in_same_event": True,
             "do_not_invent_entities_places_or_facts": True,
-            "generate_two_query_candidates": True,
-            "execute_only": "primary_event_query",
-            "primary_event_query_policy": (
-                "Search the externally verifiable anchor of the video: public "
-                "appearance, interview, declaration, broadcast, debate, or event. "
-                "Use mainly title, media outlet, main actor, and event type. Do not "
-                "include comment-only accusations, numbers, or controversial claims "
-                "unless they appear in the title or are the central subject of the video."
-            ),
-            "claim_verification_query_policy": (
-                "Search specific claims from comments such as numbers, accusations, "
-                "fraud/corruption claims, or other controversial assertions. This "
-                "query is registered for traceability but is not executed in this run."
-            ),
+            "allowed_extraction": [
+                "observable_person_or_entity",
+                "observable_topic",
+                "observable_slogan_or_phrase",
+            ],
         },
     }
+
+
+def _clean_metadata_text(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _video_metadata(bundle_or_video: dict[str, Any]) -> dict[str, Any]:
+    candidate = bundle_or_video.get("video")
+    return candidate if isinstance(candidate, dict) else bundle_or_video
+
+
+def has_sufficient_search_metadata(bundle_or_video: dict[str, Any]) -> bool:
+    """A descriptive title is sufficient; channel/date only enrich it."""
+
+    video = _video_metadata(bundle_or_video)
+    title = _clean_metadata_text(video.get("title") or video.get("video_title"))
+    if not title:
+        return False
+    normalized = title.casefold().strip(" .,:;!?-_()[]{}")
+    return normalized not in _GENERIC_VIDEO_TITLES
+
+
+def _deterministic_metadata_query(
+    bundle_or_video: dict[str, Any],
+) -> tuple[str, list[str]]:
+    if not has_sufficient_search_metadata(bundle_or_video):
+        raise ValueError("Video metadata is insufficient for deterministic query generation.")
+    video = _video_metadata(bundle_or_video)
+    title = _clean_metadata_text(video.get("title") or video.get("video_title"))
+    channel = _clean_metadata_text(
+        video.get("channel_title") or video.get("channel_name")
+    )
+    raw_date = _clean_metadata_text(
+        video.get("published_at")
+        or video.get("published_at_utc")
+        or video.get("video_published_at")
+        or video.get("publication_date")
+    )
+    date = raw_date[:10] if len(raw_date) >= 10 else raw_date
+    parts = [title]
+    fields = ["video_title"]
+    if channel and channel.casefold() not in title.casefold():
+        parts.append(channel)
+        fields.append("channel_name")
+    if date and date not in title:
+        parts.append(date)
+        fields.append("video_date")
+    return " ".join(parts), fields
 
 
 def _video_evidence_text(query_payload: dict[str, Any]) -> str:
@@ -811,20 +870,9 @@ def _classify_video_query(
     query: str,
     query_payload: dict[str, Any],
     *,
-    query_kind: str,
+    query_kind: str = "query",
 ) -> tuple[str, list[str], dict[str, Any]]:
     clean_query = " ".join(str(query or "").split())
-    if query_kind == "claim_verification_query" and not clean_query:
-        return (
-            "not_applicable",
-            [],
-            {
-                "query_tokens": [],
-                "unseen_tokens": [],
-                "unseen_ratio": None,
-                "primary_claim_only_tokens": [],
-            },
-        )
     if not clean_query:
         return "invalid_invented_content", ["empty_query"], {}
     query_tokens = [token for token in _tokens(clean_query) if len(token) > 2]
@@ -838,22 +886,39 @@ def _classify_video_query(
         ]
     )
     title_tokens = set(_tokens(title_text))
-    claim_markers = {
-        "corrupcion",
-        "corrupción",
-        "corrupto",
-        "corruptos",
-        "robo",
-        "fraude",
-        "delincuente",
-        "dictadura",
-        "millones",
-    }
-    primary_claim_only_tokens = [
-        token
-        for token in query_tokens
-        if (token.isdigit() or token in claim_markers) and token not in title_tokens
+    unsupported_event_phrases = [
+        "aparicion publica",
+        "aparición pública",
+        "declaracion",
+        "declaración",
+        "entrevista",
+        "acto de campaña",
+        "video oficial",
+        "campaign event",
+        "public appearance",
+        "official video",
     ]
+    evidence_text = _video_evidence_text(query_payload).casefold()
+    unsupported_phrases = [
+        phrase
+        for phrase in unsupported_event_phrases
+        if phrase in clean_query.casefold() and phrase not in evidence_text
+    ]
+    primary_claim_only_tokens: list[str] = []
+    if unsupported_phrases:
+        return (
+            "invalid_invented_content",
+            ["query_contains_unsupported_event_inference"],
+            {
+                "query_tokens": query_tokens,
+                "unseen_tokens": unseen_tokens,
+                "unseen_ratio": (
+                    len(unseen_tokens) / len(query_tokens) if query_tokens else None
+                ),
+                "unsupported_phrases": unsupported_phrases,
+                "primary_claim_only_tokens": [],
+            },
+        )
     if query_tokens and len(unseen_tokens) / len(query_tokens) > 0.6:
         return (
             "invalid_invented_content",
@@ -865,9 +930,7 @@ def _classify_video_query(
                 "primary_claim_only_tokens": primary_claim_only_tokens,
             },
         )
-    if query_kind == "primary_event_query" and primary_claim_only_tokens:
-        limitations.append("primary_query_contains_comment_claim_terms")
-    if len(clean_query.split()) > 8:
+    if len(clean_query.split()) > 10:
         limitations.append("query_exceeds_recommended_word_count")
     if len(query_tokens) < 3:
         limitations.append("query_has_few_informative_terms")
@@ -888,33 +951,19 @@ def _classify_video_query(
 def _query_prompt_text(query_payload: dict[str, Any]) -> tuple[str, str]:
     developer_prompt = (
         "Eres un asistente de recuperacion de noticias para una validacion RAG "
-        "academica. Debes generar dos queries candidatas para un solo video dentro "
-        "de un evento detectado.\n\n"
-        "Usa unicamente el event_id, video_id, titulo, unidades de contexto y "
-        "comentarios incluidos en este payload. No uses entidades, comentarios ni "
+        "academica. La metadata del video fue insuficiente; genera una sola query "
+        "de busqueda para ese video.\n\n"
+        "Usa unicamente los comentarios y relaciones incluidos en el payload. "
+        "No uses entidades, comentarios ni "
         "hechos de otros videos del mismo evento. No inventes nombres, lugares, "
         "organizaciones, hechos ni contexto externo.\n\n"
-        "Debes devolver:\n"
-        "1. primary_event_query: busca el ancla externa verificable del video "
-        "(aparicion publica, entrevista, declaracion, transmision, debate o evento). "
-        "Usa principalmente titulo, medio, actor principal y tipo de evento. No "
-        "incluyas acusaciones, cifras o afirmaciones polemicas de comentarios salvo "
-        "que aparezcan en el titulo o sean el tema central del video.\n"
-        "2. claim_verification_query: busca afirmaciones especificas presentes en "
-        "comentarios, como cifras, acusaciones o terminos polemicos. Esta query se "
-        "registra para trazabilidad, pero no se ejecuta en esta prueba. Puede ser "
-        "null si no hay un claim factual claro o si hay varios claims y no existe "
-        "una politica de seleccion aprobada.\n"
-        "3. claim_query_status: usa exactamente uno de estos valores: "
-        "not_applicable, no_clear_factual_claim, "
-        "multiple_claims_no_selection_policy, registered_not_executed. Usa "
-        "registered_not_executed solo cuando devuelvas una claim_verification_query "
-        "concreta.\n\n"
-        "Ambas queries deben estar en espanol, ser breves y tener idealmente entre "
-        "5 y 8 palabras. Si la evidencia del video no permite una query especifica, "
-        "devuelve una query conservadora basada solo en terminos presentes en la "
-        "evidencia y registra la limitacion. Devuelve solo JSON valido que cumpla "
-        "el esquema."
+        "Extrae solamente la persona o entidad principal observable, el tema "
+        "observable y, si ayuda, un eslogan o frase que aparezca en la evidencia. "
+        "No infieras entrevista, aparicion publica, declaracion, acto de campaña, "
+        "video oficial, evento, manifestacion ni coordinacion salvo que esas palabras "
+        "aparezcan explicitamente en la evidencia.\n\n"
+        "La query debe ser neutral, orientada a busqueda, idealmente de 4 a 10 "
+        "palabras. Devuelve solo JSON con la propiedad query."
     )
     user_prompt = (
         "Payload para generar query externa por video:\n\n"
@@ -927,12 +976,9 @@ def _query_record_from_model(
     *,
     query_candidate_id: str,
     query_result: dict[str, Any],
-    primary_query_status: str,
-    primary_query_limitations: list[str],
-    primary_query_scope_verification: dict[str, Any],
-    claim_query_status: str,
-    claim_query_limitations: list[str],
-    claim_query_scope_verification: dict[str, Any],
+    query_status: str,
+    query_limitations: list[str],
+    query_scope_verification: dict[str, Any],
     validation_input: dict[str, Any],
     bundle: dict[str, Any],
     search_start: str,
@@ -940,54 +986,17 @@ def _query_record_from_model(
     config: RagG2HierarchicalConfig,
     generated_at_utc: str,
 ) -> dict[str, Any]:
-    limitations = list(query_result.get("limitations") or [])
-    for limitation in [*primary_query_limitations, *claim_query_limitations]:
-        if limitation not in limitations:
-            limitations.append(limitation)
-    primary_query = query_result.get("primary_event_query", "")
-    claim_query = query_result.get("claim_verification_query")
-    if isinstance(claim_query, str):
-        claim_query = " ".join(claim_query.split()) or None
-    else:
-        claim_query = None
-    model_claim_query_status = query_result.get("claim_query_status")
-    if model_claim_query_status not in CLAIM_QUERY_STATUS_VALUES:
-        model_claim_query_status = None
-    if claim_query:
-        normalized_claim_query_status = "registered_not_executed"
-        if model_claim_query_status and model_claim_query_status != "registered_not_executed":
-            limitations.append("claim_query_status_normalized_to_registered_not_executed")
-    else:
-        normalized_claim_query_status = (
-            model_claim_query_status
-            if model_claim_query_status
-            in {
-                "not_applicable",
-                "no_clear_factual_claim",
-                "multiple_claims_no_selection_policy",
-            }
-            else "no_clear_factual_claim"
-        )
+    query = " ".join(str(query_result.get("query") or "").split())
     return {
         "query_candidate_id": query_candidate_id,
         "event_id": validation_input.get("event_id"),
         "video_id": bundle["video_id"],
-        "associated_context_unit_ids": bundle["associated_context_unit_ids"],
-        "source_comment_ids": bundle["source_comment_ids"],
-        "query": primary_query,
-        "query_status": primary_query_status,
-        "executed_query_type": "primary_event_query",
-        "executed_query": primary_query,
-        "primary_event_query": primary_query,
-        "primary_query_status": primary_query_status,
-        "primary_query_rationale": query_result.get("primary_query_rationale", ""),
-        "primary_query_scope_verification": primary_query_scope_verification,
-        "claim_verification_query": claim_query,
-        "claim_query_status": normalized_claim_query_status,
-        "claim_query_classification_status": claim_query_status,
-        "claim_query_rationale": query_result.get("claim_query_rationale", ""),
-        "claim_query_scope_verification": claim_query_scope_verification,
-        "claim_query_executed": False,
+        "query_text": query,
+        "query": query,
+        "query_status": query_status,
+        "query_scope_verification": query_scope_verification,
+        "query_generation_mode": LLM_FALLBACK,
+        "metadata_fields_used": [],
         "query_prompt_version": QUERY_PROMPT_VERSION,
         "model_name": config.query_model,
         "provider": config.provider,
@@ -999,8 +1008,38 @@ def _query_record_from_model(
         "query_time_window_start_utc": search_start,
         "query_time_window_end_utc": search_end,
         "generated_at_utc": generated_at_utc,
-        "input_context_summary": query_result.get("input_context_summary", ""),
-        "limitations": limitations,
+        "limitations": query_limitations,
+    }
+
+
+def _query_record_from_metadata(
+    *,
+    query_candidate_id: str,
+    validation_input: dict[str, Any],
+    bundle: dict[str, Any],
+    search_start: str,
+    search_end: str,
+    generated_at_utc: str,
+) -> dict[str, Any]:
+    query, fields = _deterministic_metadata_query(bundle)
+    return {
+        "query_candidate_id": query_candidate_id,
+        "event_id": validation_input.get("event_id"),
+        "video_id": bundle["video_id"],
+        "query_text": query,
+        "query": query,
+        "query_status": "valid",
+        "query_scope_verification": {
+            "deterministic": True,
+            "source": "video_metadata",
+        },
+        "query_generation_mode": DETERMINISTIC_METADATA,
+        "metadata_fields_used": fields,
+        "trigger_time_utc": validation_input.get("trigger_time_utc"),
+        "query_time_window_start_utc": search_start,
+        "query_time_window_end_utc": search_end,
+        "generated_at_utc": generated_at_utc,
+        "limitations": [],
     }
 
 
@@ -1021,6 +1060,7 @@ def _normalize_video_external_evidence(
         if not isinstance(result, dict):
             continue
         published_at = result.get("date")
+        publication_time = parse_external_publication_time(published_at)
         records.append(
             {
                 "external_evidence_id": _external_evidence_id(
@@ -1035,6 +1075,7 @@ def _normalize_video_external_evidence(
                 "source": result.get("source"),
                 "link": result.get("link"),
                 "published_at": published_at,
+                **publication_time.to_mapping(),
                 "retrieved_at_utc": retrieved_at_utc,
                 "provider": "serper_news",
                 "rank": rank,
@@ -1054,14 +1095,53 @@ def _normalize_video_external_evidence(
     return records
 
 
+def _filter_external_evidence_by_cutoff(
+    records: list[dict[str, Any]],
+    cutoff_utc: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Apply the optional causal boundary without changing legacy G-2 behavior."""
+
+    if cutoff_utc is None:
+        return records, {
+            "kept": len(records),
+            "excluded_at_or_after_cutoff": 0,
+            "excluded_unknown_published_at": 0,
+            "same_day_time_unknown": 0,
+        }
+    kept: list[dict[str, Any]] = []
+    excluded_future = 0
+    excluded_unknown = 0
+    same_day_unknown = 0
+    for record in records:
+        publication_time = external_publication_time_from_record(record)
+        relation = temporal_relation_to_cutoff(publication_time, cutoff_utc)
+        enriched = {
+            **record,
+            **publication_time.to_mapping(),
+            "temporal_relation_to_cutoff": relation,
+        }
+        if relation == FUTURE_RELATIVE_TO_CUTOFF:
+            excluded_future += 1
+            continue
+        if relation != CAUSALLY_AVAILABLE:
+            excluded_unknown += 1
+            if relation == SAME_DAY_TIME_UNKNOWN:
+                same_day_unknown += 1
+            continue
+        kept.append(enriched)
+    return kept, {
+        "kept": len(kept),
+        "excluded_at_or_after_cutoff": excluded_future,
+        "excluded_unknown_published_at": excluded_unknown,
+        "same_day_time_unknown": same_day_unknown,
+    }
+
+
 def _video_validation_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "video_validation_id": {"type": "string"},
-            "event_id": {"type": "string"},
-            "video_id": {"type": "string"},
             "validation_status": {
                 "type": "string",
                 "enum": sorted(VALIDATION_STATUS_VALUES),
@@ -1087,24 +1167,9 @@ def _video_validation_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string"},
             },
-            "used_context_comment_ids": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "used_external_evidence_ids": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "post_trigger_context_used": {"type": "boolean"},
             "limitations": {"type": "array", "items": {"type": "string"}},
-            "model_name": {"type": "string"},
-            "prompt_version": {"type": "string"},
-            "validated_at_utc": {"type": "string"},
         },
         "required": [
-            "video_validation_id",
-            "event_id",
-            "video_id",
             "validation_status",
             "event_interpretation",
             "confidence_label",
@@ -1115,13 +1180,7 @@ def _video_validation_schema() -> dict[str, Any]:
             "cited_comment_ids",
             "cited_context_unit_ids",
             "cited_external_evidence_ids",
-            "used_context_comment_ids",
-            "used_external_evidence_ids",
-            "post_trigger_context_used",
             "limitations",
-            "model_name",
-            "prompt_version",
-            "validated_at_utc",
         ],
     }
 
@@ -1142,7 +1201,11 @@ def _build_video_validation_payload(
             "trigger_volume": validation_input.get("trigger_volume"),
             "trigger_strength": validation_input.get("trigger_strength"),
         },
-        "video": bundle["video"],
+        "video": {
+            key: value
+            for key, value in bundle["video"].items()
+            if key in {"video_id", "title", "channel_title", "published_at"}
+        },
         "hierarchy_policy": {
             "validation_unit": "event_id + video_id",
             "do_not_use_evidence_from_other_videos": True,
@@ -1155,14 +1218,44 @@ def _build_video_validation_payload(
             "do_not_treat_post_trigger_comments_as_alert_cause": True,
         },
         "internal_evidence": {
-            "associated_context_unit_ids": bundle["associated_context_unit_ids"],
-            "source_comment_ids": bundle["source_comment_ids"],
-            "context_units": bundle["context_units"],
-            "comments": bundle["comments"],
+            "context_units": [
+                {key: value for key, value in unit.items() if key != "context_text"}
+                for unit in bundle["context_units"]
+            ],
+            "comments": [_comment_excerpt(comment) for comment in bundle["comments"]],
         },
         "external_retrieval": {
-            "query": query_record,
-            "external_evidence": external_evidence,
+            "query": (
+                {
+                    key: query_record.get(key)
+                    for key in [
+                        "query_candidate_id",
+                        "query_text",
+                        "query_generation_mode",
+                        "metadata_fields_used",
+                    ]
+                }
+                if query_record
+                else None
+            ),
+            "external_evidence": [
+                {
+                    key: record.get(key)
+                    for key in [
+                        "external_evidence_id",
+                        "title",
+                        "snippet",
+                        "source",
+                        "link",
+                        "raw_publication_date",
+                        "parsed_publication_time_utc",
+                        "publication_time_precision",
+                        "temporal_relation_to_cutoff",
+                    ]
+                    if key in record
+                }
+                for record in external_evidence
+            ],
         },
         "allowed_validation_status": sorted(VALIDATION_STATUS_VALUES),
         "allowed_event_interpretation": sorted(EVENT_INTERPRETATION_VALUES),
@@ -1182,8 +1275,14 @@ def _video_validation_prompt_text(payload: dict[str, Any]) -> tuple[str, str]:
         "externo no incluido en el payload.\n\n"
         "Cita comment_id cuando uses comentarios, context_unit_id cuando uses "
         "unidades internas y external_evidence_id cuando uses evidencia externa. "
+        "G-2 responde exclusivamente si la evidencia externa causalmente disponible "
+        "corrobora el fenomeno. Estados: CONFIRMED requiere evidencia externa valida "
+        "que lo respalde; INSUFFICIENT_EVIDENCE significa que la evidencia externa "
+        "falta, es parcial, debil o inconclusa; NOT_CONFIRMED requiere evidencia "
+        "externa suficiente para evaluar que no lo respalda o lo contradice. La "
+        "evidencia interna nunca basta para CONFIRMED ni NOT_CONFIRMED en G-2.\n\n"
         "external_event requiere al menos una cita externa valida. Si este video no "
-        "recupero evidencia externa, no puedes clasificarlo como external_event.\n\n"
+        "recupero evidencia externa, usa INSUFFICIENT_EVIDENCE.\n\n"
         "No presentes comentarios posteriores al trigger como causa de la alerta. "
         "No modifiques la decision original del detector; evalua solo la validacion "
         "posterior para este video.\n\n"
@@ -1210,8 +1309,6 @@ def _verify_video_report(
     cited_comment_ids = set(report.get("cited_comment_ids") or [])
     cited_context_unit_ids = set(report.get("cited_context_unit_ids") or [])
     cited_external_ids = set(report.get("cited_external_evidence_ids") or [])
-    used_comment_ids = set(report.get("used_context_comment_ids") or [])
-    used_external_ids = set(report.get("used_external_evidence_ids") or [])
     errors: list[str] = []
 
     invalid_cited_comment_ids = sorted(cited_comment_ids - allowed_comment_ids)
@@ -1219,52 +1316,47 @@ def _verify_video_report(
         cited_context_unit_ids - allowed_context_unit_ids
     )
     invalid_cited_external_ids = sorted(cited_external_ids - allowed_external_ids)
-    invalid_used_comment_ids = sorted(used_comment_ids - allowed_comment_ids)
-    invalid_used_external_ids = sorted(used_external_ids - allowed_external_ids)
     if invalid_cited_comment_ids:
         errors.append("invalid_cited_comment_ids_for_video")
     if invalid_cited_context_unit_ids:
         errors.append("invalid_cited_context_unit_ids_for_video")
     if invalid_cited_external_ids:
         errors.append("invalid_cited_external_evidence_ids_for_video")
-    if invalid_used_comment_ids:
-        errors.append("invalid_used_context_comment_ids_for_video")
-    if invalid_used_external_ids:
-        errors.append("invalid_used_external_evidence_ids_for_video")
-
     valid_internal_citation = bool(
         cited_comment_ids & allowed_comment_ids
         or cited_context_unit_ids & allowed_context_unit_ids
     )
     valid_external_citation = bool(cited_external_ids & allowed_external_ids)
-    if report.get("validation_status") in {"confirmed", "partially_confirmed"} and not (
-        valid_internal_citation or valid_external_citation
-    ):
-        errors.append("status_requires_at_least_one_valid_citation")
+    status = report.get("validation_status")
+    assessment = report.get("external_evidence_assessment")
+    if status in {CONFIRMED, NOT_CONFIRMED} and not valid_external_citation:
+        errors.append("decisive_g2_status_requires_valid_external_citation")
+    if status == CONFIRMED and assessment != "supports":
+        errors.append("confirmed_requires_supporting_external_assessment")
+    if status == NOT_CONFIRMED and assessment != "contradicts":
+        errors.append("not_confirmed_requires_contradicting_external_assessment")
+    if not allowed_external_ids and status != INSUFFICIENT_EVIDENCE:
+        errors.append("no_external_evidence_requires_insufficient_evidence")
     if report.get("event_interpretation") == "external_event" and not valid_external_citation:
         errors.append("external_event_requires_valid_external_citation")
     if not allowed_external_ids and report.get("event_interpretation") == "external_event":
         errors.append("external_event_without_external_evidence_for_video")
-    if bool(report.get("post_trigger_context_used")) != bool(
-        bundle["post_trigger_context_used"]
-    ):
-        errors.append("post_trigger_context_used_mismatch")
-    if report.get("video_id") != bundle["video_id"]:
-        errors.append("report_video_id_mismatch")
-
     return {
         "valid": not errors,
         "errors": errors,
         "invalid_cited_comment_ids": invalid_cited_comment_ids,
         "invalid_cited_context_unit_ids": invalid_cited_context_unit_ids,
         "invalid_cited_external_evidence_ids": invalid_cited_external_ids,
-        "invalid_used_context_comment_ids": invalid_used_comment_ids,
-        "invalid_used_external_evidence_ids": invalid_used_external_ids,
+        "invalid_used_context_comment_ids": [],
+        "invalid_used_external_evidence_ids": [],
         "valid_internal_citation": valid_internal_citation,
         "valid_external_citation": valid_external_citation,
         "allowed_comment_count": len(allowed_comment_ids),
         "allowed_context_unit_count": len(allowed_context_unit_ids),
         "allowed_external_evidence_count": len(allowed_external_ids),
+        "allowed_comment_ids": sorted(allowed_comment_ids),
+        "allowed_external_evidence_ids": sorted(allowed_external_ids),
+        "post_trigger_context_used": bool(bundle["post_trigger_context_used"]),
     }
 
 
@@ -1283,12 +1375,26 @@ def _finalize_video_report(
     external_evidence_count: int,
 ) -> dict[str, Any]:
     report = dict(model_report)
+    report.update(
+        execution_status=EXECUTED,
+        completeness_status=COMPLETE,
+        reason_code=None,
+    )
     report["video_validation_id"] = video_validation_id
     report["event_id"] = event_id
     report["video_id"] = video_id
     report["model_name"] = model
     report["prompt_version"] = VALIDATION_PROMPT_VERSION
     report["validated_at_utc"] = validated_at_utc
+    report["used_context_comment_ids"] = list(
+        verification.get("allowed_comment_ids", [])
+    )
+    report["used_external_evidence_ids"] = list(
+        verification.get("allowed_external_evidence_ids", [])
+    )
+    report["post_trigger_context_used"] = bool(
+        verification.get("post_trigger_context_used")
+    )
     report["citation_verification"] = verification
     report["attempt_count"] = attempt_count
     report["raw_response_id"] = raw_response_id
@@ -1310,11 +1416,22 @@ def _error_video_report(
     query_candidate_id: str | None,
     external_evidence_count: int,
 ) -> dict[str, Any]:
+    error_text = " ".join(errors).lower()
+    reason_code = (
+        INVALID_CITATION
+        if "citation" in error_text or "cited_" in error_text
+        else MISSING_PAYLOAD
+        if "parse" in error_text or "schema" in error_text or "payload" in error_text
+        else PROVIDER_ERROR
+    )
     return {
         "video_validation_id": video_validation_id,
         "event_id": event_id,
         "video_id": video_id,
-        "validation_status": "insufficient_evidence",
+        "validation_status": None,
+        "execution_status": FAILED,
+        "completeness_status": PARTIAL,
+        "reason_code": reason_code,
         "event_interpretation": "unclear",
         "confidence_label": "low",
         "internal_evidence_summary": "",
@@ -1408,13 +1525,16 @@ def _build_event_summary(
         for report in video_reports
     }
     statuses = {
-        report.get("video_id"): report.get("validation_status")
+        report.get("video_id"): normalize_validation_status(
+            report.get("validation_status")
+        )
         for report in video_reports
+        if report.get("validation_status") not in (None, "")
     }
 
     if not videos_with_external_evidence:
         agreement = "insufficient"
-        overall_status = "insufficient_evidence"
+        overall_status = INSUFFICIENT_EVIDENCE
         if set(interpretations.values()) == {"internal_community_reaction"}:
             overall_interpretation = "internal_community_reaction"
         else:
@@ -1423,24 +1543,33 @@ def _build_event_summary(
         assessments.values()
     ):
         agreement = "contradictory"
-        overall_status = "ambiguous"
+        overall_status = INSUFFICIENT_EVIDENCE
         overall_interpretation = "unclear"
     elif len(set(interpretations.values())) == 1 and len(set(assessments.values())) == 1:
         agreement = "consistent"
-        overall_status = next(iter(statuses.values()), "insufficient_evidence")
+        overall_status = next(iter(statuses.values()), INSUFFICIENT_EVIDENCE)
         overall_interpretation = next(iter(interpretations.values()), "unclear")
     else:
         agreement = "mixed"
-        overall_status = "partially_confirmed"
+        overall_status = INSUFFICIENT_EVIDENCE
         overall_interpretation = "unclear"
 
     if pending_video_ids:
         summary_completeness = "partial"
-        if overall_status == "confirmed":
-            overall_status = "partially_confirmed"
+        overall_status = INSUFFICIENT_EVIDENCE
         if not video_reports:
-            overall_status = "insufficient_evidence"
             overall_interpretation = "unclear"
+
+    # A decisive candidate-level status is emitted only when every evaluated
+    # video agrees. Mixed, incomplete or inconclusive evidence stays unknown.
+    normalized_statuses = set(statuses.values())
+    if videos_with_external_evidence and not pending_video_ids:
+        if normalized_statuses == {CONFIRMED}:
+            overall_status = CONFIRMED
+        elif normalized_statuses == {NOT_CONFIRMED}:
+            overall_status = NOT_CONFIRMED
+        elif normalized_statuses:
+            overall_status = INSUFFICIENT_EVIDENCE
 
     global_limitations: list[str] = []
     if videos_without_external_evidence:
@@ -1473,6 +1602,41 @@ def _build_event_summary(
     else:
         event_batch_status = "complete"
 
+    failure_text = " ".join(
+        str(value).lower()
+        for record in video_batch_records
+        for value in (record.get("status_reason"),)
+        if value
+    )
+    report_reason_codes = {
+        str(report.get("reason_code"))
+        for report in video_reports
+        if report.get("reason_code")
+    }
+    if failed_video_ids:
+        if "missing_query_payload" in failure_text:
+            reason_code = MISSING_PAYLOAD
+        elif "invalid_video_query" in failure_text:
+            reason_code = INVALID_QUERY
+        elif INVALID_CITATION in report_reason_codes:
+            reason_code = INVALID_CITATION
+        elif "serper" in failure_text:
+            reason_code = PROVIDER_ERROR
+        else:
+            reason_code = VIDEO_FAILURES
+    elif pending_video_ids:
+        reason_code = PENDING_BATCHES
+    else:
+        reason_code = None
+
+    complete = (
+        summary_completeness == "complete"
+        and event_batch_status == "complete"
+        and not next_batch_required
+        and pending_video_ids == []
+        and failed_video_ids == []
+    )
+
     return {
         "event_summary_id": _event_summary_id(event_id, video_validation_ids),
         "event_id": event_id,
@@ -1490,6 +1654,10 @@ def _build_event_summary(
         "event_batch_status": event_batch_status,
         "videos_with_external_evidence": videos_with_external_evidence,
         "videos_without_external_evidence": videos_without_external_evidence,
+        "execution_status": EXECUTED,
+        "completeness_status": COMPLETE if complete else PARTIAL,
+        "validation_status": overall_status if complete else None,
+        "reason_code": reason_code,
         "overall_validation_status": overall_status,
         "overall_interpretation": overall_interpretation,
         "agreement_between_videos": agreement,
@@ -1503,14 +1671,9 @@ def _build_event_summary(
 
 
 def _deterministic_query_preview(bundle: dict[str, Any]) -> str | None:
-    title = str(bundle.get("video", {}).get("title") or "")
-    channel = str(bundle.get("video", {}).get("channel_title") or "")
-    words = [
-        word.strip(".,;:!?()[]{}\"'")
-        for word in f"{title} {channel}".split()
-        if word.strip(".,;:!?()[]{}\"'")
-    ]
-    return " ".join(words[:8]) or None
+    if not has_sufficient_search_metadata(bundle):
+        return None
+    return _deterministic_metadata_query(bundle)[0]
 
 
 def _dry_run_event_plan(
@@ -1546,34 +1709,35 @@ def _dry_run_event_plan(
         config.search_days_before,
         config.search_days_after,
     )
+    search_end = _bounded_search_end(
+        search_end,
+        config.external_evidence_cutoff_utc,
+    )
     bundle_by_video = {bundle["video_id"]: bundle for bundle in bundles}
     video_plans: list[dict[str, Any]] = []
     for record in batch_plan["video_batch_records"]:
         bundle = bundle_by_video.get(record.get("video_id"), {})
         processed = record.get("video_batch_status") == "processed"
         preview = _deterministic_query_preview(bundle) if processed else None
+        mode = (
+            DETERMINISTIC_METADATA
+            if processed and has_sufficient_search_metadata(bundle)
+            else LLM_FALLBACK if processed else None
+        )
         video_plans.append(
             {
                 **record,
                 "query_generation": {
-                    "primary_event_query_would_be_generated": processed,
-                    "claim_verification_query_would_be_generated": processed,
+                    "query_generation_mode": mode,
+                    "llm_fallback_would_be_used": mode == LLM_FALLBACK,
                     "query_preview_type": (
-                        "deterministic_title_seed_not_llm_output"
-                        if processed
+                        "deterministic_metadata_query"
+                        if mode == DETERMINISTIC_METADATA
+                        else "not_available_until_llm_fallback"
+                        if mode == LLM_FALLBACK
                         else "not_applicable"
                     ),
-                    "primary_event_query_preview": preview,
-                    "claim_verification_query_preview": None,
-                    "claim_query_status": (
-                        "not_applicable" if processed else None
-                    ),
-                    "claim_query_executed": False,
-                    "claim_query_execution_policy": (
-                        "Claim queries are optional, generated in the same "
-                        "future LLM query call when applicable, and never "
-                        "executed in the current G-2 scope."
-                    ),
+                    "query_text_preview": preview,
                 },
                 "search_window": {
                     "window_start_date": search_start,
@@ -1634,13 +1798,18 @@ def _dry_run_event_plan(
             "window_start_date": search_start,
             "window_end_date": search_end,
             "window_rule": "trigger date +/- configured calendar days",
+            "external_evidence_cutoff_utc": config.external_evidence_cutoff_utc,
+            "unknown_publication_time_policy": (
+                "exclude_when_causal_cutoff_is_configured"
+                if config.external_evidence_cutoff_utc is not None
+                else "legacy_preserve"
+            ),
         },
-        "claim_policy": {
-            "claim_verification_query_optional": True,
-            "claim_verification_query_may_be_null": True,
-            "claim_verification_query_generates_extra_llm_call": False,
-            "claim_verification_query_executed": False,
-            "allowed_claim_query_status": sorted(CLAIM_QUERY_STATUS_VALUES),
+        "query_policy": {
+            "strategy": "metadata_first_deterministic",
+            "fallback": "restricted_llm_when_metadata_insufficient",
+            "fallback_reasoning": FALLBACK_QUERY_REASONING,
+            "claim_verification_query_generated": False,
         },
     }
 
@@ -1724,7 +1893,7 @@ def plan_rag_g2_hierarchical_dry_run(
         "serper_calls_made": False,
         "embeddings_used": False,
         "vectorstore_used": False,
-        "claim_verification_query_executed": False,
+        "claim_verification_query_generated": False,
         "event_ids_requested": (
             "all_events" if _is_all_events_request(config.event_id) else [config.event_id]
         ),
@@ -1779,8 +1948,8 @@ def plan_rag_g2_hierarchical_dry_run(
             "event_summary_unit": "event_id",
             "number_of_videos_is_not_an_exclusion_criterion": True,
             "pending_videos_are_marked_not_excluded": True,
-            "claim_verification_query_recorded_when_available": True,
-            "claim_verification_query_executed": False,
+            "query_strategy": "metadata_first_deterministic",
+            "claim_verification_query_generated": False,
             "does_not_modify_sidecars": True,
             "does_not_modify_consumer": True,
             "does_not_modify_pipeline": True,
@@ -1849,6 +2018,10 @@ def run_rag_g2_hierarchical_from_config(
         config.search_days_before,
         config.search_days_after,
     )
+    search_end = _bounded_search_end(
+        search_end,
+        config.external_evidence_cutoff_utc,
+    )
     api_key = _load_api_key()
     serper_api_key = _load_serper_api_key()
     manifest_errors: list[dict[str, Any]] = []
@@ -1857,18 +2030,27 @@ def run_rag_g2_hierarchical_from_config(
     all_external_evidence: list[dict[str, Any]] = []
     video_reports: list[dict[str, Any]] = []
     per_video_runs: list[dict[str, Any]] = []
+    external_causality_audit: list[dict[str, Any]] = []
+    serper_request_count = 0
 
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY was not found; no provider fallback attempted.")
     if not serper_api_key:
         raise RuntimeError("SERPER_API_KEY was not found; no provider fallback attempted.")
 
-    query_model_availability = _check_model_available(
-        api_key, config.query_model, config.request_timeout_seconds
+    query_fallback_required = any(
+        not has_sufficient_search_metadata(bundle) for bundle in selected_bundles
+    )
+    query_model_availability = (
+        _check_model_available(
+            api_key, config.query_model, config.request_timeout_seconds
+        )
+        if query_fallback_required
+        else {"available": True, "check_skipped": "no_llm_query_fallback_required"}
     )
     validation_model_availability = (
         query_model_availability
-        if config.validation_model == config.query_model
+        if query_fallback_required and config.validation_model == config.query_model
         else _check_model_available(
             api_key, config.validation_model, config.request_timeout_seconds
         )
@@ -1896,122 +2078,111 @@ def run_rag_g2_hierarchical_from_config(
         video_validation_id = _video_validation_id(
             config.event_id, video_id, VALIDATION_PROMPT_VERSION, config.validation_model
         )
+        query_record = None
+        external_evidence: list[dict[str, Any]] = []
+        retrieval_status = "not_started"
         query_payload = _build_video_query_payload(
             validation_input=validation_input,
             bundle=bundle,
         )
-        query_developer_prompt, query_user_prompt = _query_prompt_text(query_payload)
-        query_prompt_hash = hashlib.sha256(
-            (query_developer_prompt + "\n\n" + query_user_prompt).encode("utf-8")
-        ).hexdigest()
-        query_prompt_hashes[video_id] = query_prompt_hash
-
-        query_response = _create_json_response(
-            api_key=api_key,
-            model=config.query_model,
-            temperature=config.temperature,
-            developer_prompt=query_developer_prompt,
-            user_prompt=query_user_prompt,
-            schema_name="rag_g2_video_news_query",
-            schema=_query_response_schema(),
-            timeout=config.request_timeout_seconds,
-        )
-        parsed_query, query_response_text, query_parse_error = _parse_model_json(
-            query_response
-        )
-        query_schema_errors = _schema_errors(parsed_query, _query_response_schema())
-        raw_records.append(
-            {
-                "record_type": "video_query_generation",
-                "query_candidate_id": query_candidate_id,
-                "event_id": config.event_id,
-                "video_id": video_id,
-                "attempt": 1,
-                "model": config.query_model,
-                "temperature_requested": config.temperature,
-                "temperature_sent": _temperature_sent_value(
-                    config.query_model, config.temperature
-                ),
-                "temperature_parameter_sent": query_response.get(
-                    "temperature_parameter_sent"
-                ),
-                "prompt_version": QUERY_PROMPT_VERSION,
-                "prompt_sha256": query_prompt_hash,
-                "response_status_code": query_response.get("status_code"),
-                "response_id": (
-                    query_response.get("body", {}).get("id")
-                    if isinstance(query_response.get("body"), dict)
-                    else None
-                ),
-                "response_text": query_response_text,
-                "parsed_json": parsed_query,
-                "parse_error": query_parse_error,
-                "schema_errors": query_schema_errors,
-                "raw_response": query_response.get("body"),
-                "created_at_utc": _utc_now_iso(),
-            }
-        )
-
-        query_record = None
-        external_evidence: list[dict[str, Any]] = []
-        retrieval_status = "not_started"
-        if query_parse_error or query_schema_errors or parsed_query is None:
-            manifest_errors.append(
-                {
-                    "type": "video_query_generation_failed",
-                    "video_id": video_id,
-                    "parse_error": query_parse_error,
-                    "schema_errors": query_schema_errors,
-                }
-            )
-        else:
-            primary_query_status, primary_query_limitations, primary_query_scope_verification = (
-                _classify_video_query(
-                    parsed_query.get("primary_event_query", ""),
-                    query_payload,
-                    query_kind="primary_event_query",
-                )
-            )
-            claim_query_status, claim_query_limitations, claim_query_scope_verification = (
-                _classify_video_query(
-                    parsed_query.get("claim_verification_query", ""),
-                    query_payload,
-                    query_kind="claim_verification_query",
-                )
-            )
-            query_record = _query_record_from_model(
+        if has_sufficient_search_metadata(bundle):
+            query_record = _query_record_from_metadata(
                 query_candidate_id=query_candidate_id,
-                query_result=parsed_query,
-                primary_query_status=primary_query_status,
-                primary_query_limitations=primary_query_limitations,
-                primary_query_scope_verification=primary_query_scope_verification,
-                claim_query_status=claim_query_status,
-                claim_query_limitations=claim_query_limitations,
-                claim_query_scope_verification=claim_query_scope_verification,
                 validation_input=validation_input,
                 bundle=bundle,
                 search_start=search_start,
                 search_end=search_end,
-                config=config,
                 generated_at_utc=_utc_now_iso(),
             )
-            query_records.append(query_record)
-            if primary_query_status == "invalid_invented_content":
-                retrieval_status = "skipped_invalid_query"
-                batch_record["video_batch_status"] = "failed_retrieval"
-                batch_record["status_reason"] = "invalid_primary_video_query"
+        else:
+            query_developer_prompt, query_user_prompt = _query_prompt_text(query_payload)
+            query_prompt_hash = hashlib.sha256(
+                (query_developer_prompt + "\n\n" + query_user_prompt).encode("utf-8")
+            ).hexdigest()
+            query_prompt_hashes[video_id] = query_prompt_hash
+            query_response = _create_json_response(
+                api_key=api_key,
+                model=config.query_model,
+                temperature=config.temperature,
+                developer_prompt=query_developer_prompt,
+                user_prompt=query_user_prompt,
+                schema_name="rag_g2_video_news_query_fallback",
+                schema=_query_response_schema(),
+                timeout=config.request_timeout_seconds,
+                reasoning_effort=FALLBACK_QUERY_REASONING,
+                max_output_tokens=FALLBACK_QUERY_MAX_OUTPUT_TOKENS,
+            )
+            parsed_query, query_response_text, query_parse_error = _parse_model_json(
+                query_response
+            )
+            query_schema_errors = _schema_errors(parsed_query, _query_response_schema())
+            raw_records.append(
+                {
+                    "record_type": "video_query_generation_fallback",
+                    "query_candidate_id": query_candidate_id,
+                    "event_id": config.event_id,
+                    "video_id": video_id,
+                    "attempt": 1,
+                    "model": config.query_model,
+                    "reasoning_effort": FALLBACK_QUERY_REASONING,
+                    "max_output_tokens": FALLBACK_QUERY_MAX_OUTPUT_TOKENS,
+                    "prompt_version": QUERY_PROMPT_VERSION,
+                    "prompt_sha256": query_prompt_hash,
+                    "response_status_code": query_response.get("status_code"),
+                    "response_text": query_response_text,
+                    "parsed_json": parsed_query,
+                    "parse_error": query_parse_error,
+                    "schema_errors": query_schema_errors,
+                    "raw_response": query_response.get("body"),
+                    "created_at_utc": _utc_now_iso(),
+                }
+            )
+            if query_parse_error or query_schema_errors or parsed_query is None:
                 manifest_errors.append(
                     {
-                        "type": "invalid_primary_video_query",
+                        "type": "video_query_generation_failed",
+                        "video_id": video_id,
+                        "parse_error": query_parse_error,
+                        "schema_errors": query_schema_errors,
+                    }
+                )
+            else:
+                query_status, query_limitations, query_scope_verification = (
+                    _classify_video_query(parsed_query.get("query", ""), query_payload)
+                )
+                query_record = _query_record_from_model(
+                    query_candidate_id=query_candidate_id,
+                    query_result=parsed_query,
+                    query_status=query_status,
+                    query_limitations=query_limitations,
+                    query_scope_verification=query_scope_verification,
+                    validation_input=validation_input,
+                    bundle=bundle,
+                    search_start=search_start,
+                    search_end=search_end,
+                    config=config,
+                    generated_at_utc=_utc_now_iso(),
+                )
+
+        if query_record is not None:
+            query_records.append(query_record)
+            if query_record["query_status"] == "invalid_invented_content":
+                retrieval_status = "skipped_invalid_query"
+                batch_record["video_batch_status"] = "failed_retrieval"
+                batch_record["status_reason"] = "invalid_video_query"
+                manifest_errors.append(
+                    {
+                        "type": "invalid_video_query",
                         "video_id": video_id,
                         "query_candidate_id": query_candidate_id,
                     }
                 )
             else:
                 retrieved_at_utc = _utc_now_iso()
+                serper_request_count += 1
                 serper_response = _call_serper_news(
                     api_key=serper_api_key,
-                    query=str(query_record.get("primary_event_query", "")),
+                    query=str(query_record.get("query_text", "")),
                     window_start_date=search_start,
                     window_end_date=search_end,
                     config=config,
@@ -2033,17 +2204,37 @@ def run_rag_g2_hierarchical_from_config(
                         }
                     )
                 else:
-                    external_evidence = _normalize_video_external_evidence(
+                    normalized_external_evidence = _normalize_video_external_evidence(
                         event_id=config.event_id,
                         video_id=video_id,
                         query_candidate_id=query_candidate_id,
-                        query=str(query_record.get("primary_event_query", "")),
+                        query=str(query_record.get("query_text", "")),
                         serper_response=serper_response,
                         trigger_time_utc=str(validation_input.get("trigger_time_utc")),
                         retrieved_at_utc=retrieved_at_utc,
                     )
+                    external_evidence, causal_audit = (
+                        _filter_external_evidence_by_cutoff(
+                            normalized_external_evidence,
+                            config.external_evidence_cutoff_utc,
+                        )
+                    )
+                    external_causality_audit.append(
+                        {"video_id": video_id, **causal_audit}
+                    )
                     retrieval_status = "success" if external_evidence else "no_results"
                     all_external_evidence.extend(external_evidence)
+        else:
+            retrieval_status = "missing_payload"
+            batch_record["video_batch_status"] = "failed_retrieval"
+            batch_record["status_reason"] = "missing_query_payload"
+            manifest_errors.append(
+                {
+                    "type": "missing_query_payload",
+                    "video_id": video_id,
+                    "query_candidate_id": query_candidate_id,
+                }
+            )
 
         validation_payload = _build_video_validation_payload(
             validation_input=validation_input,
@@ -2149,8 +2340,9 @@ def run_rag_g2_hierarchical_from_config(
                     }
                 )
         if video_report is None:
-            batch_record["video_batch_status"] = "failed_validation"
-            batch_record["status_reason"] = "video_validation_generation_failed"
+            if batch_record["video_batch_status"] == "processed":
+                batch_record["video_batch_status"] = "failed_validation"
+                batch_record["status_reason"] = "video_validation_generation_failed"
             video_report = _error_video_report(
                 video_validation_id=video_validation_id,
                 event_id=config.event_id,
@@ -2175,6 +2367,29 @@ def run_rag_g2_hierarchical_from_config(
             batch_record["video_batch_status"] = "failed_retrieval"
             batch_record["status_reason"] = "serper_request_failed"
             video_report["video_batch_status"] = "failed_retrieval"
+        if batch_record["video_batch_status"] in {
+            "failed_retrieval",
+            "failed_validation",
+        }:
+            if video_report.get("validation_status") not in (None, ""):
+                video_report["model_validation_status"] = video_report.get(
+                    "validation_status"
+                )
+            status_reason = batch_record.get("status_reason")
+            if status_reason == "missing_query_payload":
+                reason_code = MISSING_PAYLOAD
+            elif status_reason == "invalid_video_query":
+                reason_code = INVALID_QUERY
+            elif status_reason == "serper_request_failed":
+                reason_code = PROVIDER_ERROR
+            else:
+                reason_code = video_report.get("reason_code") or VIDEO_FAILURES
+            video_report.update(
+                validation_status=None,
+                execution_status=FAILED,
+                completeness_status=PARTIAL,
+                reason_code=reason_code,
+            )
         video_reports.append(video_report)
         per_video_runs.append(
             {
@@ -2185,27 +2400,21 @@ def run_rag_g2_hierarchical_from_config(
                 "video_batch_status": batch_record["video_batch_status"],
                 "status_reason": batch_record["status_reason"],
                 "query_candidate_id": query_candidate_id,
-                "query": query_record.get("query") if query_record else None,
-                "executed_query_type": (
-                    query_record.get("executed_query_type") if query_record else None
+                "query_text": query_record.get("query_text") if query_record else None,
+                "query_generation_mode": (
+                    query_record.get("query_generation_mode") if query_record else None
                 ),
-                "primary_event_query": (
-                    query_record.get("primary_event_query") if query_record else None
-                ),
-                "claim_verification_query": (
-                    query_record.get("claim_verification_query") if query_record else None
-                ),
-                "claim_query_status": (
-                    query_record.get("claim_query_status") if query_record else None
-                ),
-                "claim_query_executed": (
-                    query_record.get("claim_query_executed") if query_record else None
+                "metadata_fields_used": (
+                    query_record.get("metadata_fields_used") if query_record else []
                 ),
                 "query_status": query_record.get("query_status") if query_record else None,
                 "retrieval_status": retrieval_status,
                 "external_evidence_count": len(external_evidence),
                 "video_validation_id": video_validation_id,
                 "validation_status": video_report.get("validation_status"),
+                "execution_status": video_report.get("execution_status"),
+                "completeness_status": video_report.get("completeness_status"),
+                "reason_code": video_report.get("reason_code"),
                 "event_interpretation": video_report.get("event_interpretation"),
                 "external_evidence_assessment": video_report.get(
                     "external_evidence_assessment"
@@ -2309,9 +2518,9 @@ def run_rag_g2_hierarchical_from_config(
             "chroma_used": False,
             "query_expansion_used": False,
             "multi_query_used": False,
-            "primary_event_query_executed": True,
-            "claim_verification_query_recorded": True,
-            "claim_verification_query_executed": False,
+            "query_strategy": "metadata_first_deterministic",
+            "llm_query_fallback_only_when_metadata_insufficient": True,
+            "claim_verification_query_generated": False,
             "does_not_modify_sidecars": True,
             "does_not_modify_consumer": True,
             "does_not_modify_g1": True,
@@ -2330,6 +2539,31 @@ def run_rag_g2_hierarchical_from_config(
             "window_start_date": search_start,
             "window_end_date": search_end,
             "window_rule": "trigger date +/- approved calendar days",
+            "external_evidence_cutoff_utc": config.external_evidence_cutoff_utc,
+            "published_at_boundary": "strictly_before_cutoff",
+            "unknown_publication_time_policy": (
+                "exclude_when_causal_cutoff_is_configured"
+                if config.external_evidence_cutoff_utc is not None
+                else "legacy_preserve"
+            ),
+        },
+        "external_evidence_causality": {
+            "cutoff_utc": config.external_evidence_cutoff_utc,
+            "audits_by_video": external_causality_audit,
+            "kept": sum(item["kept"] for item in external_causality_audit),
+            "excluded_at_or_after_cutoff": sum(
+                item["excluded_at_or_after_cutoff"]
+                for item in external_causality_audit
+            ),
+            "excluded_unknown_published_at": sum(
+                item["excluded_unknown_published_at"]
+                for item in external_causality_audit
+            ),
+            "same_day_time_unknown": sum(
+                item["same_day_time_unknown"]
+                for item in external_causality_audit
+            ),
+            "future_leak_count": 0,
         },
         "per_video_runs": per_video_runs,
         "pending_video_runs": [
@@ -2346,13 +2580,26 @@ def run_rag_g2_hierarchical_from_config(
         "event_summary": event_summary,
         "raw_response_count": len(raw_records),
         "query_call_count": sum(
-            1 for item in raw_records if item.get("record_type") == "video_query_generation"
+            1
+            for item in raw_records
+            if item.get("record_type") == "video_query_generation_fallback"
+        ),
+        "deterministic_query_count": sum(
+            1
+            for item in query_records
+            if item.get("query_generation_mode") == DETERMINISTIC_METADATA
+        ),
+        "llm_fallback_query_count": sum(
+            1
+            for item in query_records
+            if item.get("query_generation_mode") == LLM_FALLBACK
         ),
         "validation_call_count": sum(
             1
             for item in raw_records
             if item.get("record_type") == "video_validation_generation"
         ),
+        "serper_request_count": serper_request_count,
         "max_retries": config.max_retries,
         "retry_count": sum(1 for item in manifest_errors if item.get("type") == "retry"),
         "errors": manifest_errors,
@@ -2382,6 +2629,7 @@ def run_rag_g2_hierarchical_from_config(
         "next_batch_required": manifest["next_batch_required"],
         "query_call_count": manifest["query_call_count"],
         "validation_call_count": manifest["validation_call_count"],
+        "serper_request_count": manifest["serper_request_count"],
         "external_evidence_count": len(all_external_evidence),
         "per_video_runs": per_video_runs,
         "pending_video_runs": manifest["pending_video_runs"],
@@ -2419,10 +2667,13 @@ def run_rag_g2_hierarchical(
 
 
 __all__ = [
+    "DETERMINISTIC_METADATA",
+    "LLM_FALLBACK",
     "QUERY_PROMPT_VERSION",
     "RAG_G2H_ARTIFACT_VERSION",
     "VALIDATION_PROMPT_VERSION",
     "RagG2HierarchicalConfig",
+    "has_sufficient_search_metadata",
     "load_rag_g2_hierarchical_config",
     "plan_rag_g2_hierarchical_dry_run",
     "run_rag_g2_hierarchical",

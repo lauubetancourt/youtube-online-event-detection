@@ -114,6 +114,12 @@ def _validation_run_id(evidence_packages_path: str | Path, output_dir: str | Pat
     return f"ragval_{_short_hash(_normalize_path(evidence_packages_path), _normalize_path(output_dir))}"
 
 
+def derive_rag_validation_run_id(config: RagValidationPrepareConfig) -> str:
+    """Return the existing path-derived validation stage identity."""
+
+    return _validation_run_id(config.evidence_packages_path, config.output_dir)
+
+
 def _extract_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     nested = payload.get("rag_validation")
     if nested is None:
@@ -509,6 +515,7 @@ __all__ = [
     "build_retrieval_questions",
     "build_validation_manifest",
     "build_validation_tasks",
+    "derive_rag_validation_run_id",
     "load_rag_validation_config",
     "prepare_rag_validation_artifacts",
     "prepare_rag_validation_artifacts_from_config",
