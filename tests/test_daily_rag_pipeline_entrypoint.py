@@ -65,15 +65,15 @@ def _write_fixture(base: Path) -> Path:
 
 
 class DailyRagPipelineEntrypointTests(unittest.TestCase):
-    def test_current_compatibility_profile_preserves_historical_stage_ids(self) -> None:
+    def test_compatibility_profile_preserves_configured_stage_ids(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         resolved = resolve_daily_rag_pipeline_run(
             CommonRunCliOptions(
                 config_path=(
                     project_root
-                    / "configs"
-                    / "compatibility"
-                    / "daily_rag_current.json"
+                    / "tests"
+                    / "fixtures"
+                    / "compatibility_daily_rag.json"
                 )
             ),
             base_dir=project_root,
@@ -81,15 +81,15 @@ class DailyRagPipelineEntrypointTests(unittest.TestCase):
 
         self.assertEqual(
             resolved.config.rag.daily_sidecars.run_id,
-            "drun_c79d30f6e5a3",
+            "drun_example",
         )
         self.assertEqual(
             resolved.config.rag.daily_consumer.run_id,
-            "dragconsumer_ed2f98feca1d",
+            "dragconsumer_example",
         )
         self.assertEqual(
             resolved.config.rag.daily_context_selection.run_id,
-            "dragselect_09f6ade845cc",
+            "dragselect_example",
         )
 
     def test_common_cli_runs_non_generative_chain_with_stage_identities(self) -> None:

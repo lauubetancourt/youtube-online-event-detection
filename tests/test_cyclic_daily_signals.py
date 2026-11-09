@@ -376,17 +376,17 @@ class CyclicDailySignalsTests(unittest.TestCase):
     def test_current_profile_resolves_daily_signal_component(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         config = resolve_cyclic_daily_signal_config(
-            config_file=repository_root / "configs/compatibility/cyclic_current.json",
+            config_file=repository_root / "tests/fixtures/compatibility_cyclic.json",
             base_dir=repository_root,
         )
 
         self.assertEqual(
             config.simulation_dir,
-            (repository_root / LEGACY_OUTPUT_DIR).resolve(strict=False),
+            (repository_root / "experiments/example/cyclic_ingestion_simulation").resolve(strict=False),
         )
         self.assertEqual(
             config.canonical_dataset_path,
-            (repository_root / LEGACY_INPUT_PATH).resolve(strict=False),
+            (repository_root / "data/example/clean_comments.parquet").resolve(strict=False),
         )
         self.assertEqual(config.xiao_signal_name, "active_window_comment_count")
 

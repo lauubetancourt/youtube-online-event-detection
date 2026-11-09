@@ -406,9 +406,9 @@ class CausalEndToEndTests(unittest.TestCase):
             root = Path(tmp)
             config = _fixture(
                 root,
-                run_id="d1_c1_b",
+                run_id="example_run_b",
                 output_name="out",
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             artifacts = run_causal_end_to_end_replay(
                 config,
@@ -426,26 +426,26 @@ class CausalEndToEndTests(unittest.TestCase):
                 artifacts.output_dir / "polarization_signal_observations.jsonl"
             )
 
-        self.assertEqual(manifest["experiment_run_id"], "d1_c1_b")
-        self.assertEqual(manifest["classification_run_id"], "d1_c1_stance")
+        self.assertEqual(manifest["experiment_run_id"], "example_run_b")
+        self.assertEqual(manifest["classification_run_id"], "example_stance")
         self.assertEqual(
-            manifest["stance"]["classification_run_id"], "d1_c1_stance"
+            manifest["stance"]["classification_run_id"], "example_stance"
         )
         self.assertEqual(
-            polarization_manifest["experiment_run_id"], "d1_c1_b"
+            polarization_manifest["experiment_run_id"], "example_run_b"
         )
         self.assertEqual(
-            polarization_manifest["classification_run_id"], "d1_c1_stance"
+            polarization_manifest["classification_run_id"], "example_stance"
         )
-        self.assertEqual(resolved_config["identity"]["run_id"], "d1_c1_b")
+        self.assertEqual(resolved_config["identity"]["run_id"], "example_run_b")
         self.assertEqual(
             resolved_config["signals"]["polarization"]["classification_run_id"],
-            "d1_c1_stance",
+            "example_stance",
         )
         self.assertGreater(len(observations), 0)
         self.assertEqual(
             {row["metadata"]["classification_run_id"] for row in observations},
-            {"d1_c1_stance"},
+            {"example_stance"},
         )
 
     def test_csv_native_classifier_manifest_is_accepted_by_same_source_replay(self) -> None:
@@ -453,17 +453,17 @@ class CausalEndToEndTests(unittest.TestCase):
             root = Path(tmp)
             consumer = _fixture(
                 root,
-                run_id="d1_c1_b",
+                run_id="example_run_b",
                 output_name="out",
                 published_at_only=True,
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             assert consumer.data is not None
             assert consumer.data.local_files is not None
             source = Path(consumer.data.local_files.comments_path)
             producer = replace(
                 consumer,
-                identity=RunIdentityConfig("d1_c1_stance"),
+                identity=RunIdentityConfig("example_stance"),
             )
             plan = prepare_csv_stance_inputs(producer, source)
             classifier_output = root / "csv-native-stances"
@@ -501,18 +501,18 @@ class CausalEndToEndTests(unittest.TestCase):
             classifier_manifest["input_source_sha256"],
             expected_source_hash,
         )
-        self.assertEqual(classifier_manifest["classifier_run_id"], "d1_c1_stance")
-        self.assertEqual(replay_manifest["experiment_run_id"], "d1_c1_b")
-        self.assertEqual(replay_manifest["classification_run_id"], "d1_c1_stance")
+        self.assertEqual(classifier_manifest["classifier_run_id"], "example_stance")
+        self.assertEqual(replay_manifest["experiment_run_id"], "example_run_b")
+        self.assertEqual(replay_manifest["classification_run_id"], "example_stance")
 
     def test_precomputed_label_manifest_is_accepted_without_false_llm_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = _fixture(
                 root,
-                run_id="d1_c1_b",
+                run_id="example_run_b",
                 output_name="out",
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             manifest_path = root / "classifier_manifest.json"
             manifest = json.loads(manifest_path.read_text())
@@ -545,7 +545,7 @@ class CausalEndToEndTests(unittest.TestCase):
     def test_precomputed_label_manifest_rejects_false_llm_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            config = _fixture(root, run_id="d1_c1_b", output_name="out")
+            config = _fixture(root, run_id="example_run_b", output_name="out")
             manifest_path = root / "classifier_manifest.json"
             manifest = json.loads(manifest_path.read_text())
             manifest.update({
@@ -564,9 +564,9 @@ class CausalEndToEndTests(unittest.TestCase):
             root = Path(tmp)
             template = _fixture(
                 root,
-                run_id="d1_c1_stance",
+                run_id="example_stance",
                 output_name="unused",
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             replay = template.simulation.causal_end_to_end
             assert replay is not None
@@ -575,7 +575,7 @@ class CausalEndToEndTests(unittest.TestCase):
                 replay.stance_manifest_path,
             )
             manifests = []
-            for experiment_run_id in ("d1_c1_a", "d1_c1_b", "d1_c1_c"):
+            for experiment_run_id in ("example_run_a", "example_run_b", "example_run_c"):
                 config = replace(
                     template,
                     identity=RunIdentityConfig(experiment_run_id),
@@ -602,11 +602,11 @@ class CausalEndToEndTests(unittest.TestCase):
 
         self.assertEqual(
             [manifest["experiment_run_id"] for manifest in manifests],
-            ["d1_c1_a", "d1_c1_b", "d1_c1_c"],
+            ["example_run_a", "example_run_b", "example_run_c"],
         )
         self.assertEqual(
             {manifest["classification_run_id"] for manifest in manifests},
-            {"d1_c1_stance"},
+            {"example_stance"},
         )
 
     def test_legacy_equal_run_ids_remain_valid(self) -> None:
@@ -628,9 +628,9 @@ class CausalEndToEndTests(unittest.TestCase):
             root = Path(tmp)
             config = _fixture(
                 root,
-                run_id="d1_c1_b",
+                run_id="example_run_b",
                 output_name="out",
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             manifest_path = root / "classifier_manifest.json"
             manifest = json.loads(manifest_path.read_text())
@@ -645,9 +645,9 @@ class CausalEndToEndTests(unittest.TestCase):
             root = Path(tmp)
             config = _fixture(
                 root,
-                run_id="d1_c1_b",
+                run_id="example_run_b",
                 output_name="out",
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             manifest_path = root / "classifier_manifest.json"
             manifest = json.loads(manifest_path.read_text())
@@ -662,9 +662,9 @@ class CausalEndToEndTests(unittest.TestCase):
             root = Path(tmp)
             config = _fixture(
                 root,
-                run_id="d1_c1_b",
+                run_id="example_run_b",
                 output_name="out",
-                classification_run_id="d1_c1_stance",
+                classification_run_id="example_stance",
             )
             comments_path = root / "silver_comments.csv"
             comments = pd.read_csv(comments_path)

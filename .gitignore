@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 /configs/local/
+/configs/audits/
+/configs/compatibility/
+/configs/development/
+/configs/experiments/
+/configs/topics/
 
 # Local Python environments
 .venv/
@@ -17,11 +22,8 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Local datasets. Keep only the approved acquisition manifest versionable.
-/data/**
-!/data/bronze/
-!/data/bronze/runs/
-!/data/bronze/runs/extraction_run_20260409T154335Z.json
+# Local datasets and acquisition manifests
+/data/
 
 # Experimental and generated runtime artifacts
 /experiments/

@@ -24,7 +24,7 @@ from youtube_pipeline.entrypoints.cyclic_pipeline import (
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-PROFILE_DIR = REPOSITORY_ROOT / "configs" / "development"
+PROFILE_DIR = REPOSITORY_ROOT / "tests" / "fixtures"
 
 
 def _read_jsonl(path: Path) -> list[dict]:

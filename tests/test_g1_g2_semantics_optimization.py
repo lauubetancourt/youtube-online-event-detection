@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-import pytest
-
 from youtube_pipeline.rag_generation_g1 import (
     _citation_verification as verify_g1,
     _compact_event_payload,
@@ -18,14 +13,12 @@ from youtube_pipeline.rag_generation_g2_hierarchical import (
     _query_response_schema,
     _verify_video_report,
     _video_validation_schema,
-    has_sufficient_search_metadata,
 )
 from youtube_pipeline.validation_status import (
     CONFIRMED,
     INSUFFICIENT_EVIDENCE,
     NOT_CONFIRMED,
     VALIDATION_STATUS_VALUES,
-    normalize_validation_status,
 )
 
 
@@ -233,48 +226,3 @@ def test_prompt_payloads_keep_text_once_and_runtime_allowlists_outside_model() -
     assert "source_comment_ids" not in g2_payload["internal_evidence"]
     assert "model_name" not in g2_payload["external_retrieval"]["query"]
     assert _schema_errors({"query": "Título informativo"}, _query_response_schema()) == []
-
-
-def test_d1_c1_b_persisted_artifacts_are_legacy_readable_without_network() -> None:
-    root = Path("outputs/causal_end_to_end/d1_c1_b/candidate_rag")
-    candidate_dirs = sorted(root.glob("candidate_*"))
-    if not candidate_dirs:
-        pytest.skip("Persisted D1-C1-B pilot artifacts are not present.")
-
-    processed_video_units = 0
-    metadata_sufficient = 0
-    legacy_statuses: list[str] = []
-    for candidate_dir in candidate_dirs:
-        query_path = candidate_dir / "g2_hierarchical/rag_video_news_queries.jsonl"
-        input_path = candidate_dir / "rag_consumer/rag_validation_inputs.jsonl"
-        g1_path = candidate_dir / "g1/rag_validation_reports.jsonl"
-        if not query_path.exists():
-            continue
-        query_rows = [
-            json.loads(line) for line in query_path.read_text().splitlines() if line
-        ]
-        processed_video_units += len(query_rows)
-        inputs = [
-            json.loads(line) for line in input_path.read_text().splitlines() if line
-        ]
-        event_id = candidate_dir.name
-        selected = next(row for row in inputs if row.get("event_id") == event_id)
-        videos = {
-            row.get("video_id"): row for row in selected.get("associated_videos", [])
-        }
-        metadata_sufficient += sum(
-            has_sufficient_search_metadata(videos[row["video_id"]])
-            for row in query_rows
-        )
-        legacy_statuses.extend(
-            json.loads(line)["validation_status"]
-            for line in g1_path.read_text().splitlines()
-            if line
-        )
-
-    assert processed_video_units == 26
-    assert metadata_sufficient == 0
-    assert all(
-        normalize_validation_status(status) in VALIDATION_STATUS_VALUES
-        for status in legacy_statuses
-    )

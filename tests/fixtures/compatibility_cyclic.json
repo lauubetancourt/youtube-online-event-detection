@@ -8,8 +8,8 @@
   },
   "simulation": {
     "ingestion": {
-      "input_path": "data/gold/clean_comments.parquet",
-      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "input_path": "data/example/clean_comments.parquet",
+      "output_dir": "experiments/example/cyclic_ingestion_simulation",
       "simulation_mode": "cyclic_ingestion_simulation",
       "timezone": "America/Bogota",
       "canonical_timezone": "UTC",
@@ -21,20 +21,20 @@
       "video_id_col": "video_id",
       "collection_start_date_local": null,
       "collection_end_date_local": null,
-      "simulation_run_id": "sim_42fc5b0f114b",
+      "simulation_run_id": "sim_example",
       "dry_run": true,
       "notes": null,
       "params": {}
     },
     "orchestration": {
-      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "simulation_dir": "experiments/example/cyclic_ingestion_simulation",
       "run_monitoring": false,
       "run_detection": false,
       "run_rag": false,
       "update_cycle_state": true
     },
     "stateful_adapter": {
-      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "simulation_dir": "experiments/example/cyclic_ingestion_simulation",
       "run_monitoring": false,
       "run_detection": false,
       "run_rag": false
@@ -42,9 +42,9 @@
   },
   "signals": {
     "daily": {
-      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "simulation_dir": "experiments/example/cyclic_ingestion_simulation",
       "mode": "signals_dry_run",
-      "canonical_dataset_path": "data/gold/clean_comments.parquet",
+      "canonical_dataset_path": "data/example/clean_comments.parquet",
       "output_dir": null,
       "xiao_signal_name": "active_window_comment_count",
       "max_cycles": null,
@@ -59,10 +59,10 @@
   },
   "detection": {
     "connector": {
-      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
+      "simulation_dir": "experiments/example/cyclic_ingestion_simulation",
       "mode": "detection_dry_run",
       "max_cycles": 5,
-      "canonical_dataset_path": "data/gold/clean_comments.parquet",
+      "canonical_dataset_path": "data/example/clean_comments.parquet",
       "output_dir": null,
       "debug_full_rows": false,
       "run_monitoring": false,
@@ -82,8 +82,8 @@
       "extreme_volume_multiplier": 2.0
     },
     "daily_frequency": {
-      "simulation_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation",
-      "output_dir": "experiments/xiao/media/log_3/cyclic_ingestion_simulation/daily_frequency_baseline_cooldown_0",
+      "simulation_dir": "experiments/example/cyclic_ingestion_simulation",
+      "output_dir": "experiments/example/cyclic_ingestion_simulation/daily_frequency_baseline_cooldown_0",
       "signal_name": "new_comment_count",
       "baseline_window_size_cycles": 3,
       "k_multiplier": 2.0,
