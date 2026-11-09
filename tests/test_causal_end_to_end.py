@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import hashlib
+import io
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -356,6 +359,47 @@ class CausalEndToEndTests(unittest.TestCase):
     @staticmethod
     def _no_trigger_detector(detector_id: str, _config):
         return _FirstUpdateDetector(detector_id, trigger=False)
+
+    def test_cli_skip_rag_builds_evidence_without_calling_validation(self) -> None:
+        from scripts.run_causal_end_to_end import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _fixture(root, run_id="evidence-only", output_name="out")
+
+            def run_with_triggered_candidates(*args, **kwargs):
+                return run_causal_end_to_end_replay(
+                    *args, **kwargs,
+                    detector_factory=lambda detector_id, _: _FirstUpdateDetector(
+                        detector_id, trigger=True
+                    ),
+                )
+
+            with (
+                patch("sys.argv", [
+                    "run_causal_end_to_end.py", "--config", "unused.json",
+                    "--base-dir", str(root), "--execute", "--skip-rag",
+                ]),
+                patch("scripts.run_causal_end_to_end.load_run_config", return_value=config),
+                patch("scripts.run_causal_end_to_end.run_causal_end_to_end_replay",
+                      side_effect=run_with_triggered_candidates),
+                patch("youtube_pipeline.causal_end_to_end.run_candidate_rag_validation",
+                      side_effect=AssertionError("RAG must not run")) as validation,
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                self.assertEqual(main(), 0)
+
+            summary = json.loads(output.getvalue())
+            manifest = json.loads(Path(summary["manifest"]).read_text())
+            evidence = json.loads((root / "out" / "candidate_evidence" /
+                                   "candidate_evidence_manifest.json").read_text())
+            validation.assert_not_called()
+            self.assertGreater(summary["candidates"], 0)
+            self.assertGreater(evidence["counts"]["evidence_ready"], 0)
+            self.assertFalse(manifest["rag"]["executed"])
+            self.assertEqual(manifest["rag"]["token_usage"]["total_tokens"], 0)
+            self.assertTrue(all(n == 0 for n in manifest["rag"]["external_calls"].values()))
+            self.assertEqual(summary["validations"], 0)
 
     def test_distinct_experiment_and_classification_runs_replay_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

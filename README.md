@@ -1,182 +1,99 @@
-# YouTube Event Detection Prototype
+# Detección de eventos en YouTube
 
-This repository contains the research prototype for detecting candidate events
-from YouTube activity and preparing traceable evidence for posterior RAG
-validation. It supports local prepared datasets, retrospective replay, a daily
-cyclic simulation, activity signals, statistical detection, evidence assembly,
-and internal/external validation stages.
+Este repositorio contiene un prototipo para la detección de eventos en YouTube. Su enfoque de detección en línea combina señales de actividad y medidas de polarización para detectar cambios estadísticos y generar eventos candidatos con la información disponible en cada corte temporal. Después examina esos candidatos mediante dos mecanismos que emplean modelos de lenguaje: la evaluación del patrón conversacional (G-1) y el contraste con noticias y otras fuentes públicas (G-2).
 
-The prototype separates four concerns:
+Los pasos siguientes explican cómo obtener o preparar los datos, configurar el análisis y ejecutar una reproducción cronológica en su equipo.
 
-```text
-data and temporal simulation
-→ activity signals and statistical detection
-→ candidate evidence
-→ RAG context and validation
-```
+## Requisitos
 
-The current implementation is research software. A detector trigger is an event
-candidate, not confirmation that a real-world event occurred.
-
-## Runtime
-
-The active runtime is Python 3.14.3, pinned in `.python-version`.
-`requirements-runtime.txt` is the dependency authority for the current pipeline,
-maintained scripts, and test suite. `requirements.txt` is a legacy snapshot for
-the previous environment and historical notebooks; it is not the active runtime
-definition.
+Necesita Python 3.14.3, indicado en `.python-version`. Desde la raíz del repositorio, cree un entorno virtual e instale las dependencias:
 
 ```bash
 python3.14 -m venv .venv
 source .venv/bin/activate
-python -m pip install pip==26.0.1
-python -m pip install -r requirements-runtime.txt
-python -m unittest discover -s tests -p 'test_*.py'
+python -m pip install -r requirements.txt
 ```
 
-River 0.26.1 is installed reproducibly. Neutral Page-Hinkley and ADWIN adapters
-are available for composition, synthetic tests, and the technical cyclic activity
-runtime. Their development profiles and technical defaults are not calibrated or
-validated event-detection choices.
-
-Formal polarization measures are available for isolated, validated
-`OpinionDistribution` inputs through neutral adapters for Esteban-Ray, EMDPol,
-and MEC. The alpha `pol_measures` dependency is pinned to its audited Git commit;
-its library defaults are integration defaults, not calibrated project choices.
-This layer does not yet classify comments, build temporal polarization signals,
-or connect polarization values to detectors.
-
-## Main execution paths
-
-Versionable JSON profiles and the common resolver are the preferred interface for
-integrated executions. The common CLI is intentionally small: `--config`,
-`--run-id`, `--output-root`, execution mode, and `--log-level`.
-
-Current cyclic compatibility flow:
+Copie el archivo de ejemplo y complete solo las claves de los servicios que vaya a utilizar:
 
 ```bash
-.venv/bin/python scripts/run_cyclic_pipeline.py \
-  --config configs/compatibility/cyclic_current.json \
-  --output-root outputs/cyclic_current \
-  --dry-run
+cp .env.example .env
 ```
 
-Technical neutral-detector profiles:
+Obtenga `YOUTUBE_API_KEY` en [Google Cloud](https://developers.google.com/youtube/data/guides/authentication), tras habilitar YouTube Data API v3; `OPENAI_API_KEY` en la [plataforma de OpenAI](https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key); y `SERPER_API_KEY` en [Serper](https://serper.dev/). La primera se usa para extraer datos, la segunda para clasificar posturas y validar candidatos, y la tercera para buscar fuentes públicas. El archivo `.env` es local y está excluido de Git.
+
+## 1. Elegir u obtener los datos
+
+Puede partir de archivos propios de comentarios y videos si cumplen los [requisitos de entrada](docs/causal_end_to_end_replay.md#entrada-local). Si necesita obtenerlos de YouTube, ejecute una extracción:
 
 ```bash
-.venv/bin/python scripts/run_cyclic_pipeline.py \
-  --config configs/development/cyclic_activity_page_hinkley.json \
-  --output-root outputs/cyclic_activity_page_hinkley \
-  --dry-run
+python -m youtube_pipeline.run_pipeline extract \
+  --query 'TEMA' --published-after 'AAAA-MM-DDT00:00:00Z' \
+  --published-before 'AAAA-MM-DDT00:00:00Z' \
+  --min-views 0 --min-comments 0 \
+  --data-root data/mi_extraccion --save-legacy-csv
 ```
 
-Replace the profile with `configs/development/cyclic_activity_adwin.json` to use
-ADWIN without changing Python. Both profiles use a synthetic provisional input and
-stop at persisted `DetectionResult` envelopes.
+Reemplace `TEMA` por los términos de búsqueda y las fechas de ejemplo por el inicio y el fin del período que desea consultar. El comando busca videos y extrae sus comentarios. Los mínimos de vistas y comentarios están puestos en cero para que el ejemplo no descarte videos por esos criterios. Si desea filtrarlos, cambie esos valores. Los filtros se aplican después de la búsqueda. La extracción conserva además topes por defecto de 500 videos y 5 000 comentarios por video, ajustables con `--max-results` y `--max-comments`. Consulte las demás opciones con `python -m youtube_pipeline.run_pipeline extract --help`.
 
-The same activity runtime selects either registered signal through
-`signals.activity.signal_id`: the current explicit surface contains
-`comment_count_event_window_120s_step_30s` and
-`unique_author_count_event_window_120s_step_30s`. Both signals can be combined with
-Page-Hinkley or ADWIN through JSON routing. This is technical runtime support, not
-methodological validation of either signal or detector configuration.
+Al terminar, encontrará `data/mi_extraccion/comments.csv` y `data/mi_extraccion/videos_preliminares.csv`, además de los archivos Bronze (JSONL) y Silver (Parquet). Los dos CSV sirven como entrada para los pasos siguientes. Si realiza otra extracción, use otro `--data-root` para conservar los archivos de cada lectura por separado.
 
-Current non-generative daily RAG flow:
+## 2. Preparar y configurar el análisis
+
+El análisis utiliza el CSV de comentarios y el archivo de videos de la misma extracción. Si parte de archivos propios, compruebe que los comentarios tengan los campos necesarios y que sus `video_id` correspondan a los del archivo de videos. La [guía de entrada](docs/causal_end_to_end_replay.md#entrada-local) indica las columnas y formatos admitidos.
+
+Copie el [perfil de ejemplo](configs/examples/reproduccion_cronologica.example.json) para crear su configuración local:
 
 ```bash
-.venv/bin/python scripts/run_daily_rag_pipeline.py \
-  --config configs/compatibility/daily_rag_current.json \
-  --output-root outputs/daily_rag_current \
-  --dry-run
+mkdir -p configs/local
+cp configs/examples/reproduccion_cronologica.example.json configs/local/mi_analisis.json
 ```
 
-`youtube_pipeline/run_pipeline.py` remains a compatibility facade for the
-historical extraction, local storage, cleaning, and playback CLI. Stage-specific
-scripts also remain available where their diagnostic or compatibility contracts
-are still tested. They translate legacy arguments into the common configuration
-model; they are not a second methodological authority.
+En `configs/local/mi_analisis.json`, ajuste el tema y su proposición, las rutas de los datos y los tiempos de inicio y fin. El inicio de la reproducción y el de polarización deben quedar antes del primer comentario del CSV; ambos finales, después del último. El clasificador procesa todo el CSV y la reproducción exige las posturas de ese mismo conjunto. Si desea analizar solo un período, prepare primero un CSV con los comentarios de ese período y úselo tanto para clasificar como para reproducir. Revise también ventanas, cadencias, detectores y rutas de salida: los valores del ejemplo son ilustrativos, no una configuración recomendada. El perfil local está excluido de Git. La extracción no lo crea automáticamente. La [guía de configuración](configs/README.md) explica cómo se relacionan sus campos.
 
-## Architecture at a glance
+La reproducción necesita posturas clasificadas. Puede obtenerlas con el clasificador del repositorio usando el mismo perfil. Indique en `--run-id` el valor que haya puesto en `signals.polarization.classification_run_id` y use el mismo CSV que figura en `data.local_files.comments_path`. Revise primero el plan y después ejecute:
 
-```text
-YouTube API or local files
-→ Bronze/Silver persistence
-→ cleaning and canonical timestamps
-→ prepared dataset
-→ retrospective replay or daily cyclic simulation
-→ activity metric and activity signal
-→ ActivityObservation
-→ detector routing
-→ DetectionResult
-→ EventCandidate (internal contract; not yet the general runtime handoff)
-→ evidence assembly
-→ RAG sidecars and context selection
-→ G-1 internal validation / G-2 external validation
+```bash
+python scripts/run_comment_stance_classifier.py \
+  --config configs/local/mi_analisis.json --base-dir . \
+  --run-id ejemplo_posturas --comments-path data/mi_extraccion/comments.csv \
+  --output-root outputs/stances/ejemplo_posturas --dry-run
+python scripts/run_comment_stance_classifier.py \
+  --config configs/local/mi_analisis.json --base-dir . \
+  --run-id ejemplo_posturas --comments-path data/mi_extraccion/comments.csv \
+  --output-root outputs/stances/ejemplo_posturas --execute
 ```
 
-The independent future polarization path currently stops at its formal measure:
+Los comandos usan las rutas e identificadores del ejemplo. Si los cambia en el perfil, cámbielos también aquí. La primera orden solo muestra el plan. La segunda consulta al modelo y guarda `comment_stances.jsonl` y `classifier_manifest.json` en `outputs/stances/ejemplo_posturas`.
 
-```text
-CommentStance (contract/design only)
-→ OpinionDistribution
-→ configured polarization measure
-→ PolarizationMeasurement
+En el perfil, `simulation.causal_end_to_end.stance_artifact_path` y `stance_manifest_path` deben apuntar a esos dos archivos. El programa comprueba que correspondan al CSV, al tema y al identificador de clasificación configurados. Las posturas se calculan **antes** de la reproducción, pero solo entran al análisis cuando se incorpora su comentario.
+
+## 3. Reproducir los cortes temporales
+
+Cuando estén listos los archivos, las posturas y el perfil, revise el plan de reproducción:
+
+```bash
+python scripts/run_causal_end_to_end.py --config configs/local/mi_analisis.json --base-dir .
 ```
 
-XIAO EMA is the current reference detector and regression anchor. It is not a
-commitment to the final detector. The daily frequency baseline remains a separate
-implemented route and has not yet been migrated to the neutral
-`DetectionResult → EventCandidate` handoff.
+Este comando muestra el intervalo, el paso del reloj simulado y el directorio de salida, sin procesar comentarios ni llamar a servicios externos. Si el plan es el esperado, elija una de estas dos formas de ejecutar el análisis:
 
-## Repository structure
+```bash
+# Construir señales, alertas, candidatos y evidencia interna:
+python scripts/run_causal_end_to_end.py --config configs/local/mi_analisis.json --base-dir . \
+  --execute --skip-rag
 
-- `youtube_pipeline/`: domain components, contracts, configuration, and runners.
-- `scripts/`: maintained entrypoints plus historical audit/compatibility tools.
-- `configs/`: versionable execution profiles; no secrets or datasets.
-- `tests/`: synthetic unit, contract, regression, compatibility, and integration
-  tests.
-- `data/`: local acquisition and prepared datasets; not repository source.
-- `experiments/`: local experimental outputs and retained evidence.
-- `docs/`: current contracts, implementation references, audits, and historical
-  decisions.
+# Incluir también G-1 y G-2:
+python scripts/run_causal_end_to_end.py --config configs/local/mi_analisis.json --base-dir . --execute
+```
 
-## Documentation map
+La opción `--skip-rag` termina después de construir la evidencia interna. La otra también ejecuta G-1 y G-2 cuando hay evidencia para evaluarlos y requiere acceso a los servicios indicados en el perfil. Cada ejecución nueva necesita un directorio de salida vacío. Si desea probar las dos opciones, haga una copia del perfil y asigne a cada ejecución un `identity.run_id` y un `simulation.causal_end_to_end.output_dir` diferentes.
 
-The general documents explain and link. The specialized documents define their
-contracts.
+Si una ejecución se interrumpe, puede repetir su comando con `--resume` para continuar con la misma configuración y los mismos datos. En el directorio de salida encontrará `resolved_config.json`, `causal_replay_manifest.json` y los resultados de las etapas ejecutadas. La [guía de reproducción](docs/causal_end_to_end_replay.md) explica cómo consultar esos archivos.
 
-| Need | Authority |
-|---|---|
-| End-to-end architecture and implementation status | [`docs/pipeline_architecture.md`](docs/pipeline_architecture.md) |
-| Data layers, canonical fields, time, IDs, and deduplication | [`docs/data_contracts.md`](docs/data_contracts.md) |
-| Activity metrics, signals, observations, detection results, and candidates | [`docs/activity_signal_semantics.md`](docs/activity_signal_semantics.md) |
-| Opinion distributions and formal polarization measures | [`docs/polarization_measures.md`](docs/polarization_measures.md) |
-| Candidate/evidence/RAG preparation boundary | [`docs/rag_event_evidence_contract.md`](docs/rag_event_evidence_contract.md) |
-| Profiles, `RunConfig`, resolved paths, hashes, and identities | [`configs/README.md`](configs/README.md) |
-| Hierarchical G-2 implementation | [`docs/rag_g2_hierarchical_implementation.md`](docs/rag_g2_hierarchical_implementation.md) |
-| External-evidence temporal audit | [`docs/external_evidence_temporal_audit.md`](docs/external_evidence_temporal_audit.md) |
-| LLM token/context audit | [`docs/llm_token_context_audit.md`](docs/llm_token_context_audit.md) |
-| G-1 gate/context stability experiment | [`docs/g1_gate_context_stability_experiment.md`](docs/g1_gate_context_stability_experiment.md) |
-| Cyclic temporal semantics and implementation history | [`docs/cyclic_ingestion_simulation_design.md`](docs/cyclic_ingestion_simulation_design.md) |
+La reproducción incorpora en cortes sucesivos los comentarios que ya estaban en el conjunto preparado. No consulta de nuevo la API de YouTube ni establece una latencia máxima de detección.
 
-Historical audits, regression reports, PoCs, and experiment registries retain the
-facts and decisions of their stated cutoff. Their status headers link back to the
-current architecture; they are evidence, not competing normative specifications.
+## Guías de consulta
 
-## Secrets, data, and generated artifacts
-
-API keys remain in environment variables such as `YOUTUBE_API_KEY`,
-`OPENAI_API_KEY`, and `SERPER_API_KEY`. They are not part of `RunConfig`,
-`resolved_config`, `config_hash`, or methodological manifests.
-
-Real datasets, Bronze/Silver/Gold materializations, experiment outputs, caches,
-and external API responses remain local unless a separate policy explicitly
-selects a small artifact for versioning. Configuration profiles identify paths;
-they do not version or distribute datasets.
-
-## Compatibility boundary
-
-Historical event IDs, RAG stage IDs, sidecar schemas, prompts, and artifact names
-remain preserved where tests or retained evidence depend on them. Compatibility
-does not make historical paths or schemas the final architecture. Removal requires
-an explicit migration with equivalent tests and verified consumers.
+- [Configuración de ejecuciones](configs/README.md): explica las secciones de los perfiles JSON y cómo se relacionan la clasificación y la reproducción.
+- [Entrada y reproducción cronológica](docs/causal_end_to_end_replay.md): detalla los archivos de entrada, las salidas y los límites del recorrido.

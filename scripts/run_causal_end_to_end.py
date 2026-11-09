@@ -19,7 +19,7 @@ def main() -> int:
         description=(
             "Run the Silver-to-CandidateValidationResult causal historical replay. "
             "The default is prepare-only; --execute explicitly enables the run and "
-            "its configured G-1/G-2 providers."
+            "its configured G-1/G-2 providers unless --skip-rag is supplied."
         )
     )
     parser.add_argument("--config", required=True, help="Resolved RunConfig source JSON.")
@@ -28,6 +28,11 @@ def main() -> int:
         "--execute",
         action="store_true",
         help="Execute the replay, including configured G-1/G-2 calls for ready evidence.",
+    )
+    parser.add_argument(
+        "--skip-rag",
+        action="store_true",
+        help="Stop after building local candidate evidence; do not call G-1/G-2 providers.",
     )
     parser.add_argument(
         "--resume",
@@ -58,13 +63,14 @@ def main() -> int:
             "end_utc": replay.end_utc.isoformat(),
             "step": replay.step,
             "output_dir": str(replay.output_dir),
+            "execute_rag": not args.skip_rag,
             "requires_execute": True,
         }, indent=2))
         return 0
     artifacts = run_causal_end_to_end_replay(
         run,
         base_dir=args.base_dir,
-        execute_rag=True,
+        execute_rag=not args.skip_rag,
         resume=args.resume,
         retry_rag_errors=True,
         progress=lambda message: print(message, file=sys.stderr, flush=True),

@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+/configs/local/
 
 # Local Python environments
 .venv/
